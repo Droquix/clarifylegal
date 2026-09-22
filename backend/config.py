@@ -14,7 +14,7 @@ class Settings:
     HOST: str = os.getenv("HOST", "127.0.0.1")
     CORS_ORIGINS: list[str] = [
         origin.strip()
-        for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+        for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,*").split(",")
         if origin.strip()
     ]
     MAX_FILE_SIZE_BYTES: int = 5 * 1024 * 1024
