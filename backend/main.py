@@ -56,6 +56,8 @@ class TextAnalysisRequest(BaseModel):
 
 @app.get("/health")
 @app.get("/api/health")
+@app.get("/")
+@app.get("/api/index.py")
 def health_check():
     """Health check endpoint displaying API status and configuration."""
     return {
@@ -108,6 +110,7 @@ async def clean_uploaded_document(file: UploadFile) -> str:
     return clean_text
 
 @app.post("/api/analyze-file", response_model=AnalysisResponse)
+@app.post("/analyze-file", response_model=AnalysisResponse)
 async def analyze_document_file(file: UploadFile = File(...)):
     """
     Parses uploaded PDF or text file strictly in memory, extracts content,
@@ -125,6 +128,7 @@ async def analyze_document_file(file: UploadFile = File(...)):
     return analysis_result
 
 @app.post("/api/analyze-text", response_model=AnalysisResponse)
+@app.post("/analyze-text", response_model=AnalysisResponse)
 async def analyze_document_text(payload: TextAnalysisRequest):
     """
     Analyzes raw text pasted directly by the user.
@@ -151,6 +155,7 @@ async def analyze_document_text(payload: TextAnalysisRequest):
     return analysis_result
 
 @app.post("/api/qa", response_model=QAResponse)
+@app.post("/qa", response_model=QAResponse)
 async def ask_document_question(payload: QARequest):
     """
     Answers a specific user question grounded in the provided document context.
@@ -167,6 +172,7 @@ async def ask_document_question(payload: QARequest):
 
 
 @app.post("/api/compare-text", response_model=ComparisonResponse)
+@app.post("/compare-text", response_model=ComparisonResponse)
 async def compare_document_text(payload: DocumentComparisonRequest):
     """Compare pasted original and revised documents using source-backed AI output."""
     original_text = sanitize_and_clean_text(payload.original_text)
@@ -184,6 +190,7 @@ async def compare_document_text(payload: DocumentComparisonRequest):
 
 
 @app.post("/api/compare-files", response_model=ComparisonResponse)
+@app.post("/compare-files", response_model=ComparisonResponse)
 async def compare_document_files(
     original_file: UploadFile = File(...),
     revised_file: UploadFile = File(...),
