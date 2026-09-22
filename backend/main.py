@@ -56,8 +56,6 @@ class TextAnalysisRequest(BaseModel):
 
 @app.get("/health")
 @app.get("/api/health")
-@app.get("/")
-@app.get("/api/index.py")
 def health_check():
     """Health check endpoint displaying API status and configuration."""
     return {
