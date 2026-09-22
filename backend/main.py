@@ -55,6 +55,7 @@ class TextAnalysisRequest(BaseModel):
     text: str = Field(..., min_length=20, max_length=30000, description="Raw document text to analyze")
 
 @app.get("/health")
+@app.get("/api/health")
 def health_check():
     """Health check endpoint displaying API status and configuration."""
     return {
