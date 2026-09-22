@@ -1,18 +1,45 @@
 import time
-from typing import Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from backend.config import settings
-from backend.models.schemas import AnalysisResponse, QARequest, QAResponse
+from backend.models.schemas import (
+    AnalysisResponse,
+    ComparisonResponse,
+    DocumentComparisonRequest,
+    QARequest,
+    QAResponse,
+)
 from backend.services.pdf_service import extract_text_from_pdf_bytes, sanitize_and_clean_text
-from backend.services.gemini_service import analyze_document_with_gemini, answer_question_with_gemini
+from backend.services.gemini_service import (
+    analyze_document_with_gemini,
+    answer_question_with_gemini,
+    compare_documents_with_gemini,
+)
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("clarifylegal.main")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    key_present = bool(settings.GEMINI_API_KEY)
+    logger.info("==================================================================")
+    logger.info("ClarifyLegal API Starting Up...")
+    logger.info("AI provider key configured: %s", key_present)
+    logger.info("==================================================================")
+    yield
+    logger.info("ClarifyLegal API Shutting Down...")
 
 app = FastAPI(
     title="ClarifyLegal API",
-    description="Privacy-first, in-memory legal document simplification API powered by Google Gemini.",
-    version="1.0.0"
+    description="In-memory legal document simplification API using a configured third-party AI provider.",
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS setup
@@ -25,7 +52,7 @@ app.add_middleware(
 )
 
 class TextAnalysisRequest(BaseModel):
-    text: str = Field(..., min_length=20, description="Raw document text to analyze")
+    text: str = Field(..., min_length=20, max_length=30000, description="Raw document text to analyze")
 
 @app.get("/health")
 def health_check():
@@ -34,23 +61,15 @@ def health_check():
         "status": "healthy",
         "app": "ClarifyLegal API",
         "version": "1.0.0",
-        "privacy_guarantee": "Zero persistence. In-memory processing only.",
-        "gemini_api_configured": bool(settings.GEMINI_API_KEY)
+        "processing_notice": "Documents are not stored in an application database and are sent to the configured AI provider for analysis.",
+        "ai_provider_configured": bool(settings.GEMINI_API_KEY)
     }
 
-@app.post("/api/analyze-file", response_model=AnalysisResponse)
-async def analyze_document_file(file: UploadFile = File(...)):
-    """
-    Parses uploaded PDF or text file strictly in memory, extracts content,
-    and generates plain-English analysis with risk scores and clause breakdowns.
-    """
-    start_time = time.time()
 
+async def clean_uploaded_document(file: UploadFile) -> str:
+    """Read and validate an allowed upload without persisting it to disk."""
     if not file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No filename provided in upload."
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No filename provided in upload.")
 
     filename_lower = file.filename.lower()
     if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".txt")):
@@ -59,7 +78,6 @@ async def analyze_document_file(file: UploadFile = File(...)):
             detail="Unsupported file format. Please upload a .pdf or .txt file."
         )
 
-    # Read bytes directly in memory
     file_bytes = await file.read()
     if len(file_bytes) > settings.MAX_FILE_SIZE_BYTES:
         raise HTTPException(
@@ -76,13 +94,30 @@ async def analyze_document_file(file: UploadFile = File(...)):
             extracted_text = file_bytes.decode("latin-1")
 
     clean_text = sanitize_and_clean_text(extracted_text)
-    if not clean_text or len(clean_text) < 20:
+    if len(clean_text) > settings.MAX_DOCUMENT_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Document text exceeds the {settings.MAX_DOCUMENT_CHARS:,}-character limit."
+        )
+    if len(clean_text) < 20:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Extracted document content is too short or empty."
         )
+    return clean_text
 
-    analysis_result = analyze_document_with_gemini(clean_text)
+@app.post("/api/analyze-file", response_model=AnalysisResponse)
+async def analyze_document_file(file: UploadFile = File(...)):
+    """
+    Parses uploaded PDF or text file strictly in memory, extracts content,
+    and generates plain-English analysis with risk scores and clause breakdowns.
+    """
+    start_time = time.time()
+
+    clean_text = await clean_uploaded_document(file)
+
+    analysis_result = await run_in_threadpool(analyze_document_with_gemini, clean_text)
+    analysis_result["extracted_text"] = clean_text
     elapsed = time.time() - start_time
     analysis_result["processing_time_seconds"] = round(elapsed, 2)
 
@@ -101,8 +136,14 @@ async def analyze_document_text(payload: TextAnalysisRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Pasted text must be at least 20 characters long."
         )
+    if len(clean_text) > settings.MAX_DOCUMENT_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Pasted text exceeds the {settings.MAX_DOCUMENT_CHARS:,}-character limit."
+        )
 
-    analysis_result = analyze_document_with_gemini(clean_text)
+    analysis_result = await run_in_threadpool(analyze_document_with_gemini, clean_text)
+    analysis_result["extracted_text"] = clean_text
     elapsed = time.time() - start_time
     analysis_result["processing_time_seconds"] = round(elapsed, 2)
 
@@ -119,5 +160,37 @@ async def ask_document_question(payload: QARequest):
             detail="Question cannot be empty."
         )
 
-    qa_result = answer_question_with_gemini(payload.question, payload.document_text)
+    logger.info("POST /api/qa received. Document text length: %s chars", len(payload.document_text))
+    qa_result = await run_in_threadpool(answer_question_with_gemini, payload.question, payload.document_text)
     return qa_result
+
+
+@app.post("/api/compare-text", response_model=ComparisonResponse)
+async def compare_document_text(payload: DocumentComparisonRequest):
+    """Compare pasted original and revised documents using source-backed AI output."""
+    original_text = sanitize_and_clean_text(payload.original_text)
+    revised_text = sanitize_and_clean_text(payload.revised_text)
+    if len(original_text) < 20 or len(revised_text) < 20:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Both original and revised text must contain at least 20 characters."
+        )
+
+    start_time = time.time()
+    comparison = await run_in_threadpool(compare_documents_with_gemini, original_text, revised_text)
+    comparison["processing_time_seconds"] = round(time.time() - start_time, 2)
+    return comparison
+
+
+@app.post("/api/compare-files", response_model=ComparisonResponse)
+async def compare_document_files(
+    original_file: UploadFile = File(...),
+    revised_file: UploadFile = File(...),
+):
+    """Compare uploaded PDF or TXT document versions without persisting either file."""
+    original_text = await clean_uploaded_document(original_file)
+    revised_text = await clean_uploaded_document(revised_file)
+    start_time = time.time()
+    comparison = await run_in_threadpool(compare_documents_with_gemini, original_text, revised_text)
+    comparison["processing_time_seconds"] = round(time.time() - start_time, 2)
+    return comparison

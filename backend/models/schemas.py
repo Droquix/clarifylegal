@@ -42,6 +42,7 @@ class DocumentSummary(BaseModel):
 class AnalysisResponse(BaseModel):
     summary: DocumentSummary
     clauses: List[ClauseBreakdown]
+    extracted_text: Optional[str] = Field(None, description="Cleaned extracted text of the document")
     disclaimer: str = Field(
         default="ClarifyLegal provides informational breakdowns only and does NOT provide legal advice. "
                 "No attorney-client relationship is formed. Please consult a licensed attorney for binding legal guidance.",
@@ -50,13 +51,52 @@ class AnalysisResponse(BaseModel):
     processing_time_seconds: float = Field(0.0, description="Time taken to parse and analyze")
 
 class QARequest(BaseModel):
-    question: str = Field(..., min_length=2, description="User question about the document")
-    document_text: str = Field(..., min_length=10, description="In-memory document text context")
+    question: str = Field(..., min_length=2, max_length=1000, description="User question about the document")
+    document_text: str = Field(..., min_length=10, max_length=30000, description="In-memory document text context")
 
 class QAResponse(BaseModel):
     question: str
     answer: str = Field(..., description="Informational answer grounded in document text")
     lawyer_followups: List[str] = Field(default_factory=list, description="Suggested questions for an attorney")
+    citations: List[str] = Field(default_factory=list, description="Verbatim document excerpts supporting the answer")
     disclaimer: str = Field(
         default="Informational guidance only — not legal advice. Consult a qualified attorney for specific legal counsel."
     )
+
+class ChangeType(str, Enum):
+    ADDED = "added"
+    REMOVED = "removed"
+    MODIFIED = "modified"
+
+class RiskDirection(str, Enum):
+    INCREASED = "increased"
+    DECREASED = "decreased"
+    UNCHANGED = "unchanged"
+
+class DocumentComparisonRequest(BaseModel):
+    original_text: str = Field(..., min_length=20, max_length=30000)
+    revised_text: str = Field(..., min_length=20, max_length=30000)
+
+class DocumentChange(BaseModel):
+    id: str
+    change_type: ChangeType
+    title: str
+    category: ClauseCategory
+    risk_direction: RiskDirection
+    original_text: Optional[str] = None
+    revised_text: Optional[str] = None
+    plain_english_impact: str
+    lawyer_questions: List[str] = Field(default_factory=list)
+
+class ComparisonSummary(BaseModel):
+    overview: str
+    material_change_count: int = Field(ge=0)
+    higher_risk_changes: int = Field(ge=0)
+
+class ComparisonResponse(BaseModel):
+    summary: ComparisonSummary
+    changes: List[DocumentChange]
+    disclaimer: str = Field(
+        default="ClarifyLegal provides informational document comparisons only and does NOT provide legal advice."
+    )
+    processing_time_seconds: float = Field(0.0)

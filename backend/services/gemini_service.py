@@ -1,12 +1,19 @@
 import json
 import logging
+import re
 import time
-from typing import Dict, Any, Optional
+import httpx
+from typing import Dict, Any, Optional, List
 from google import genai
 from google.genai import types
+from fastapi import HTTPException, status
 
 from backend.config import settings
-from backend.services.disclaimer_service import apply_disclaimer_guardrails, MANDATORY_DISCLAIMER
+from backend.services.disclaimer_service import (
+    apply_disclaimer_guardrails,
+    MANDATORY_DISCLAIMER,
+    sanitize_informational_text
+)
 
 logger = logging.getLogger("clarifylegal.gemini")
 
@@ -22,124 +29,191 @@ STRICT MANDATORY RULES FOR YOUR OUTPUT:
 6. Output ONLY a valid JSON object matching the requested schema. Do NOT include markdown code blocks or text outside JSON.
 """
 
-def generate_mock_analysis(document_text: str) -> Dict[str, Any]:
+def repair_truncated_json(text: str) -> dict:
     """
-    Generates an intelligent mock legal document breakdown when Gemini API key is not present.
-    Allows local development, offline usage, and seamless testing.
+    Repairs truncated JSON strings by closing unclosed quotes, brackets, and braces.
     """
-    word_count = len(document_text.split())
-    doc_lower = document_text.lower()
+    s = text.strip()
+    first_brace = s.find("{")
+    if first_brace != -1:
+        s = s[first_brace:]
 
-    doc_type = "Legal Agreement"
-    if "non-disclosure" in doc_lower or "confidential" in doc_lower or "nda" in doc_lower:
-        doc_type = "Non-Disclosure Agreement (NDA)"
-    elif "lease" in doc_lower or "tenant" in doc_lower or "landlord" in doc_lower:
-        doc_type = "Residential / Commercial Lease Agreement"
-    elif "employment" in doc_lower or "employee" in doc_lower or "employer" in doc_lower:
-        doc_type = "Employment Contract"
-    elif "service" in doc_lower or "contractor" in doc_lower or "client" in doc_lower:
-        doc_type = "Services Agreement / Independent Contractor Contract"
+    # Remove trailing commas or incomplete keys
+    s = re.sub(r',\s*$', '', s)
 
-    has_indemnity = "indemnify" in doc_lower or "hold harmless" in doc_lower
-    has_noncompete = "non-compete" in doc_lower or "solicit" in doc_lower
-    has_termination = "terminate" in doc_lower or "cancellation" in doc_lower or "notice" in doc_lower
+    # Check if we're inside an unclosed string
+    in_string = False
+    escaped = False
+    for char in s:
+        if char == '"' and not escaped:
+            in_string = not in_string
+        if char == '\\' and not escaped:
+            escaped = True
+        else:
+            escaped = False
 
-    overall_risk = "medium"
-    if has_indemnity or has_noncompete:
-        overall_risk = "high"
+    if in_string:
+        s += '"'
 
-    clauses = [
-        {
-            "id": "clause-1",
-            "title": "Confidentiality & Non-Disclosure Scope",
-            "category": "obligations_and_liabilities",
-            "risk_level": "medium",
-            "original_text": "Recipient agrees to hold and maintain in strict confidence all Confidential Information supplied by Disclosing Party and shall not disclose such information to any third party without prior written consent.",
-            "plain_english": "This clause typically means you are legally obligated to keep all shared business secrets and internal documents private.",
-            "potential_impact": "Disclosing protected information, even accidentally, could potentially trigger breach of contract allegations or monetary damages.",
-            "lawyer_questions": [
-                "Does this confidentiality obligation have a specific expiration date?",
-                "What specific items are excluded from the definition of confidential information?"
-            ]
-        },
-        {
-            "id": "clause-2",
-            "title": "Indemnification & Legal Expense Liability",
-            "category": "red_flags",
-            "risk_level": "high" if has_indemnity else "medium",
-            "original_text": "Party agrees to defend, indemnify, and hold harmless the Company from and against any claims, liabilities, losses, damages, and reasonable attorney's fees arising out of any breach.",
-            "plain_english": "This provision usually implies that if a third party sues the company due to your work or actions, you may be expected to pay their legal fees and settlement costs.",
-            "potential_impact": "Indemnity clauses can create significant financial exposure if legal disputes arise.",
-            "lawyer_questions": [
-                "Can we add a financial cap to my indemnity liability?",
-                "Can we limit indemnification strictly to claims resulting from gross negligence or intentional misconduct?"
-            ]
-        },
-        {
-            "id": "clause-3",
-            "title": "Termination & Notice Period",
-            "category": "termination_and_renewal",
-            "risk_level": "low" if has_termination else "medium",
-            "original_text": "Either party may terminate this Agreement at any time upon providing thirty (30) days prior written notice to the other party.",
-            "plain_english": "This clause typically means either side can cancel the contract as long as they give 30 days written notice in advance.",
-            "potential_impact": "Ensures flexibility to end the agreement, but requires planning for a 30-day transition period.",
-            "lawyer_questions": [
-                "What method of written notice is required (e.g. certified mail vs. email)?",
-                "What happens to outstanding work or payments during the 30-day notice period?"
-            ]
-        },
-        {
-            "id": "clause-4",
-            "title": "Governing Law & Dispute Resolution",
-            "category": "standard_and_boilerplate",
-            "risk_level": "low",
-            "original_text": "This Agreement shall be governed by and construed in accordance with the laws of the State of Delaware, without regard to its conflict of law principles.",
-            "plain_english": "This clause designates Delaware state law as the legal standard used to interpret this document if a disagreement arises.",
-            "potential_impact": "If a legal dispute occurs, court proceedings would generally take place under Delaware legal jurisdiction.",
-            "lawyer_questions": [
-                "Is Delaware a convenient jurisdiction if formal arbitration or court filings become necessary?"
-            ]
-        }
-    ]
+    # Count open braces and brackets
+    open_braces = 0
+    open_brackets = 0
+    in_str = False
+    esc = False
+    for char in s:
+        if char == '"' and not esc:
+            in_str = not in_str
+        elif not in_str:
+            if char == '{':
+                open_braces += 1
+            elif char == '}':
+                open_braces = max(0, open_braces - 1)
+            elif char == '[':
+                open_brackets += 1
+            elif char == ']':
+                open_brackets = max(0, open_brackets - 1)
+        if char == '\\' and not esc:
+            esc = True
+        else:
+            esc = False
 
-    return apply_disclaimer_guardrails({
-        "summary": {
-            "document_type": doc_type,
-            "executive_summary": (
-                f"This document appears to be a {doc_type}. It defines the primary legal relationship, "
-                "confidentiality duties, termination rules, and liability allocations between the participating parties."
-            ),
-            "overall_risk_score": overall_risk,
-            "risk_rationale": (
-                "Assessed based on indemnity commitments, non-disclosure obligations, and potential liability provisions."
-            ),
-            "word_count": word_count,
-            "metadata": {
-                "effective_date": "Upon signing / As stated in Section 1",
-                "governing_law": "State of Delaware (or as specified in jurisdiction section)",
-                "parties_involved": ["Disclosing Party / Company", "Receiving Party / Contractor"],
-                "key_deadlines": ["30-day written termination notice requirement"],
-                "financial_terms": ["Payment due within 30 days of invoice receipt (if applicable)"]
+    s += ']' * open_brackets
+    s += '}' * open_braces
+    return json.loads(s)
+
+
+def extract_json_from_text(text: str) -> dict:
+    """
+    Extracts and parses a JSON dictionary from LLM response text,
+    handling markdown blocks, leading/trailing prose, or truncated JSON.
+    """
+    if not text:
+        raise ValueError("Empty response text received from AI model")
+
+    cleaned = text.strip()
+
+    # Direct JSON parse attempt
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    # Handle ```json ... ``` markdown blocks
+    if "```" in cleaned:
+        for block in cleaned.split("```"):
+            block_str = block.strip()
+            if block_str.startswith("json"):
+                block_str = block_str[4:].strip()
+            if block_str.startswith("{"):
+                try:
+                    return json.loads(block_str)
+                except Exception:
+                    try:
+                        return repair_truncated_json(block_str)
+                    except Exception:
+                        pass
+
+    # Substring search for first '{'
+    first_brace = cleaned.find("{")
+    last_brace = cleaned.rfind("}")
+    if first_brace != -1:
+        if last_brace > first_brace:
+            json_str = cleaned[first_brace:last_brace + 1]
+            try:
+                return json.loads(json_str)
+            except Exception:
+                pass
+        
+        # Try repairing truncated JSON substring from first brace
+        try:
+            return repair_truncated_json(cleaned[first_brace:])
+        except Exception as e:
+            logger.error(f"JSON repair failed: {e}. Snippet: {cleaned[:200]}")
+
+    raise ValueError(f"Unable to parse valid JSON from AI response: {cleaned[:300]}")
+
+
+def _ground_analysis(data: Dict[str, Any], document_text: str) -> Dict[str, Any]:
+    """Ensures clauses contain original text and valid schema structures."""
+    if not isinstance(data, dict):
+        raise ValueError("Invalid document analysis format returned by AI model.")
+
+    clauses = data.get("clauses")
+    if not isinstance(clauses, list):
+        data["clauses"] = []
+
+    return data
+
+
+def _call_nvidia_api(prompt: str) -> str:
+    """
+    Executes completion request against NVIDIA API endpoint (OpenAI compatible).
+    Loops through available active models if primary choice returns an error.
+    """
+    url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.GEMINI_API_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
+    # Active NVIDIA NIM model candidates in priority order
+    candidate_models = []
+    if settings.GEMINI_MODEL and not settings.GEMINI_MODEL.startswith("gemini"):
+        candidate_models.append(settings.GEMINI_MODEL)
+    
+    candidate_models.extend([
+        "meta/llama-3.2-11b-vision-instruct",
+        "meta/llama-3.2-90b-vision-instruct",
+        "writer/palmyra-fin-70b-32k",
+        "ibm/granite-3.0-8b-instruct"
+    ])
+
+    # Deduplicate while preserving order
+    seen = set()
+    models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
+
+    last_error = ""
+    with httpx.Client(timeout=120.0) as client:
+        for model_name in models_to_try:
+            payload = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_tokens": 4096
             }
-        },
-        "clauses": clauses,
-        "disclaimer": MANDATORY_DISCLAIMER
-    })
+            logger.info(f"Calling NVIDIA API with model: {model_name}")
+            try:
+                res = client.post(url, headers=headers, json=payload)
+                if res.status_code == 200:
+                    data = res.json()
+                    content = data["choices"][0]["message"]["content"].strip()
+                    return content
+                else:
+                    logger.warning(f"NVIDIA API model {model_name} status {res.status_code}: {res.text[:150]}")
+                    last_error = f"NVIDIA API Error ({res.status_code}): {res.text[:200]}"
+            except Exception as exc:
+                logger.warning(f"NVIDIA API model {model_name} exception: {str(exc)}")
+                last_error = str(exc)
+
+    raise RuntimeError(f"All NVIDIA model attempts failed. Last error: {last_error}")
 
 
 def analyze_document_with_gemini(document_text: str) -> Dict[str, Any]:
     """
-    Calls the Gemini 2.0 Flash API to perform structured legal text simplification.
-    Falls back to mock analysis if GEMINI_API_KEY is not configured or if API fails.
+    Analyzes legal document using either Google Gemini API or NVIDIA API based on configured key.
     """
-    if not settings.GEMINI_API_KEY:
-        logger.info("GEMINI_API_KEY not configured. Utilizing intelligent mock analysis mode.")
-        return generate_mock_analysis(document_text)
+    key_configured = bool(settings.GEMINI_API_KEY)
+    is_nvidia_key = settings.GEMINI_API_KEY.startswith("nvapi-")
+    logger.info("Document analysis requested. Configured: %s | NVIDIA Key: %s", key_configured, is_nvidia_key)
 
-    try:
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        
-        prompt = f"""
+    if not key_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document analysis is unavailable until an AI provider key is configured."
+        )
+
+    prompt = f"""
 {SYSTEM_PROMPT}
 
 DOCUMENT CONTENT TO ANALYZE:
@@ -177,56 +251,63 @@ Please analyze the above document content and return a JSON object with this EXA
   ]
 }}
 """
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.2,
-            )
-        )
 
-        response_text = response.text.strip()
-        data = json.loads(response_text)
+    try:
+        if is_nvidia_key:
+            response_text = _call_nvidia_api(prompt)
+        else:
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            logger.info(f"Sending document analysis prompt to Google Gemini API (model: {settings.GEMINI_MODEL})...")
+            response = client.models.generate_content(
+                model=settings.GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                )
+            )
+            response_text = response.text.strip()
+
+        parsed_data = extract_json_from_text(response_text)
+        data = _ground_analysis(parsed_data, document_text)
+        data["extracted_text"] = document_text
         return apply_disclaimer_guardrails(data)
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.warning(f"Gemini API call encountered an error ({str(e)}). Falling back to mock analysis.")
-        return generate_mock_analysis(document_text)
+        logger.exception(f"Document analysis provider request failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Sorry, document analysis encountered an error: {str(e)}"
+        )
 
 
 def answer_question_with_gemini(question: str, document_text: str) -> Dict[str, Any]:
     """
     Answers user questions about an uploaded legal document in plain English.
     """
-    if not settings.GEMINI_API_KEY:
-        return {
-            "question": question,
-            "answer": (
-                f"Based on the provided document text, this agreement typically addresses questions like '{question}' "
-                "within its general terms. For specific legal interpretation, consider asking an attorney."
-            ),
-            "lawyer_followups": [
-                f"How does the contract specifically enforce provisions related to: {question}?",
-                "Are there any external statutory rights that override this clause in my state?"
-            ],
-            "disclaimer": MANDATORY_DISCLAIMER
-        }
+    key_configured = bool(settings.GEMINI_API_KEY)
+    is_nvidia_key = settings.GEMINI_API_KEY.startswith("nvapi-")
+    logger.info("Document Q&A requested. Provider configured: %s | NVIDIA Key: %s | Context len: %s", key_configured, is_nvidia_key, len(document_text))
 
-    try:
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        
-        prompt = f"""
+    if not key_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API key is missing. Please set GEMINI_API_KEY in your backend/.env file to enable Q&A."
+        )
+
+    prompt = f"""
 {SYSTEM_PROMPT}
 
 DOCUMENT CONTEXT:
 ---
-{document_text[:20000]}
+{document_text[:25000]}
 ---
 
 USER QUESTION: {question}
 
-Please answer the user's question accurately using ONLY information found in or implied by the document.
+Please answer the user's question accurately using ONLY information explicitly found in or implied by the document.
 Remember:
 - Frame your answer informationally ("Based on the contract, section X typically suggests...").
 - NEVER give direct instructions ("You should", "Do not").
@@ -238,33 +319,177 @@ Respond in valid JSON format:
   "lawyer_followups": ["question 1", "question 2"]
 }}
 """
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.3,
+    try:
+        if is_nvidia_key:
+            response_text = _call_nvidia_api(prompt)
+        else:
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model=settings.GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.3,
+                )
             )
+            response_text = response.text.strip()
+
+        data = extract_json_from_text(response_text)
+        answer = sanitize_informational_text(data.get("answer", ""))
+        return {
+            "question": question,
+            "answer": answer,
+            "lawyer_followups": data.get("lawyer_followups", []),
+            "citations": data.get("citations", []),
+            "disclaimer": MANDATORY_DISCLAIMER
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Document Q&A provider request failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Sorry, document Q&A encountered an error: {str(e)}"
         )
 
-        data = json.loads(response.text.strip())
-        return {
-            "question": question,
-            "answer": apply_disclaimer_guardrails({"summary": {"executive_summary": data.get("answer", "")}})["summary"]["executive_summary"],
-            "lawyer_followups": data.get("lawyer_followups", []),
+
+def compare_documents_with_gemini(original_text: str, revised_text: str) -> Dict[str, Any]:
+    """
+    Compares two contract versions and identifies additions, deletions, and modifications.
+    """
+    key_configured = bool(settings.GEMINI_API_KEY)
+    is_nvidia_key = settings.GEMINI_API_KEY.startswith("nvapi-")
+    
+    if not key_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document comparison is unavailable until an AI provider key is configured."
+        )
+
+    prompt = f"""
+{SYSTEM_PROMPT}
+
+ORIGINAL DOCUMENT:
+---
+{original_text[:20000]}
+---
+
+REVISED DOCUMENT:
+---
+{revised_text[:20000]}
+---
+
+Please compare the original and revised contract documents. Identify material additions, removals, and modifications between them.
+Return ONLY a valid JSON object matching this EXACT structure:
+{{
+  "summary": {{
+    "overview": "High level summary of key changes between the two contract versions in plain English",
+    "material_change_count": 3,
+    "higher_risk_changes": 1
+  }},
+  "changes": [
+    {{
+      "id": "change-1",
+      "change_type": "added" | "removed" | "modified",
+      "title": "Short descriptive title of clause change",
+      "category": "obligations_and_liabilities" | "red_flags" | "standard_and_boilerplate" | "termination_and_renewal" | "financial_and_payment",
+      "risk_direction": "increased" | "decreased" | "unchanged",
+      "original_text": "text excerpt from original contract or null",
+      "revised_text": "text excerpt from revised contract or null",
+      "plain_english_impact": "explanation of what changed and its practical implication",
+      "lawyer_questions": ["question 1"]
+    }}
+  ]
+}}
+"""
+    try:
+        if is_nvidia_key:
+            response_text = _call_nvidia_api(prompt)
+        else:
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model=settings.GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                )
+            )
+            response_text = response.text.strip()
+
+        raw_data = extract_json_from_text(response_text)
+        
+        # Normalize response structure to guarantee schema compliance
+        summary_raw = raw_data.get("summary", {})
+        if isinstance(summary_raw, str):
+            summary_dict = {
+                "overview": summary_raw,
+                "material_change_count": len(raw_data.get("changes", [])),
+                "higher_risk_changes": sum(1 for c in raw_data.get("changes", []) if str(c.get("risk_direction", "")).lower() == "increased")
+            }
+        elif isinstance(summary_raw, dict):
+            summary_dict = {
+                "overview": summary_raw.get("overview") or summary_raw.get("executive_summary") or "Comparison completed.",
+                "material_change_count": int(summary_raw.get("material_change_count", len(raw_data.get("changes", [])))),
+                "higher_risk_changes": int(summary_raw.get("higher_risk_changes", 0))
+            }
+        else:
+            summary_dict = {
+                "overview": "Comparison completed.",
+                "material_change_count": len(raw_data.get("changes", [])),
+                "higher_risk_changes": 0
+            }
+
+        normalized_changes = []
+        raw_changes = raw_data.get("changes", [])
+        if isinstance(raw_changes, list):
+            for idx, c in enumerate(raw_changes, 1):
+                if not isinstance(c, dict):
+                    continue
+                
+                change_type = str(c.get("change_type", "modified")).lower()
+                if change_type not in ["added", "removed", "modified"]:
+                    change_type = "modified"
+
+                category = str(c.get("category", "standard_and_boilerplate")).lower()
+                if category not in ["obligations_and_liabilities", "red_flags", "standard_and_boilerplate", "termination_and_renewal", "financial_and_payment"]:
+                    category = "standard_and_boilerplate"
+
+                risk_direction = str(c.get("risk_direction", c.get("risk_impact", "unchanged"))).lower()
+                if risk_direction not in ["increased", "decreased", "unchanged"]:
+                    if risk_direction in ["high", "medium"]:
+                        risk_direction = "increased"
+                    elif risk_direction == "low":
+                        risk_direction = "decreased"
+                    else:
+                        risk_direction = "unchanged"
+
+                normalized_changes.append({
+                    "id": str(c.get("id", f"change-{idx}")),
+                    "change_type": change_type,
+                    "title": str(c.get("title") or c.get("clause_title") or f"Change #{idx}"),
+                    "category": category,
+                    "risk_direction": risk_direction,
+                    "original_text": c.get("original_text"),
+                    "revised_text": c.get("revised_text"),
+                    "plain_english_impact": str(c.get("plain_english_impact") or c.get("plain_english_diff") or "Impact details provided in summary."),
+                    "lawyer_questions": c.get("lawyer_questions", []) if isinstance(c.get("lawyer_questions"), list) else []
+                })
+
+        normalized_data = {
+            "summary": summary_dict,
+            "changes": normalized_changes,
             "disclaimer": MANDATORY_DISCLAIMER
         }
+        return normalized_data
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.warning(f"QA Gemini call failed: {str(e)}")
-        return {
-            "question": question,
-            "answer": (
-                f"Regarding your question ('{question}'), legal documents usually define governing rights in dedicated sections. "
-                "You may want to ask a lawyer to review the exact phrasing in your document."
-            ),
-            "lawyer_followups": [
-                f"Does this contract impose specific limits regarding {question}?",
-                "What remedies exist if a dispute arises regarding this term?"
-            ],
-            "disclaimer": MANDATORY_DISCLAIMER
-        }
+        logger.exception(f"Document comparison provider request failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Sorry, document comparison encountered an error: {str(e)}"
+        )
+

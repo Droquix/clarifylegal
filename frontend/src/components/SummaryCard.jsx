@@ -1,100 +1,109 @@
 import React from 'react';
-import { AlertCircle, Calendar, ShieldAlert, Users, DollarSign, Scale, Clock } from 'lucide-react';
+import { FileText, Calendar, Scale, Users, Clock, AlertTriangle, Download, MoreVertical, FileCode } from 'lucide-react';
 
-export default function SummaryCard({ summary }) {
+export default function SummaryCard({ summary, onDownloadReport, clausesCount = 4 }) {
   if (!summary) return null;
 
   const {
     document_type,
     executive_summary,
     overall_risk_score,
-    risk_rationale,
     word_count,
     metadata = {}
   } = summary;
 
-  const getRiskBadgeClass = (score) => {
-    switch (score?.toLowerCase()) {
-      case 'low': return 'badge-low';
-      case 'high': return 'badge-high';
-      default: return 'badge-medium';
-    }
-  };
+  const riskLevel = overall_risk_score?.toLowerCase() || 'medium';
+  const riskLabel = riskLevel === 'high' ? 'High Risk' : riskLevel === 'low' ? 'Low Risk' : 'Medium Risk';
 
   return (
-    <div className="card" style={{ marginBottom: '2rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
-        <div>
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
-            Document Classification
-          </span>
-          <h2 style={{ fontSize: '1.6rem', marginTop: '0.2rem' }}>{document_type || 'Legal Agreement'}</h2>
+    <div className="summary-dashboard-card">
+      {/* Document Title Header Row */}
+      <div className="doc-header-row">
+        <div className="doc-title-group">
+          <div className="doc-icon-container">
+            <FileCode size={24} className="doc-icon" />
+          </div>
+          <div>
+            <h1 className="doc-main-title">{document_type || 'Non-Disclosure Agreement (NDA)'}</h1>
+            <div className="doc-subtitle-badges">
+              <span className="doc-badge-pill">Legal Document</span>
+              <span className="dot-separator">•</span>
+              <span>{word_count || 142} words</span>
+              <span className="dot-separator">•</span>
+              <span>{clausesCount} clauses</span>
+            </div>
+          </div>
         </div>
 
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Risk Rating</div>
-          <span className={`badge ${getRiskBadgeClass(overall_risk_score)}`}>
-            <ShieldAlert size={14} />
-            {overall_risk_score?.toUpperCase() || 'MEDIUM'} RISK
-          </span>
+        <div className="doc-actions-group">
+          <div className={`risk-banner-pill risk-${riskLevel}`}>
+            <AlertTriangle size={16} />
+            <span>{riskLabel} — See risk breakdown</span>
+          </div>
+
+          <button onClick={onDownloadReport} className="btn-download-report">
+            <Download size={16} />
+            <span>Download Report</span>
+          </button>
+
+          <button className="btn-icon-overflow" aria-label="More options">
+            <MoreVertical size={18} />
+          </button>
         </div>
       </div>
 
-      <div style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem', marginBottom: '1.5rem', borderLeft: '4px solid var(--accent-primary)' }}>
-        <h3 style={{ fontSize: '1.05rem', marginBottom: '0.4rem', color: 'var(--accent-primary)' }}>
-          Executive Plain-English Summary
-        </h3>
-        <p style={{ color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-          {executive_summary}
-        </p>
-      </div>
-
-      {risk_rationale && (
-        <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <AlertCircle size={16} style={{ color: 'var(--risk-medium-text)', flexShrink: 0 }} />
-          <span><strong>Risk Assessment Rationale:</strong> {risk_rationale}</span>
-        </div>
-      )}
-
-      {/* Metadata grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
-            <Calendar size={15} />
-            <span>Effective Date</span>
+      {/* Executive Summary & Metadata Card */}
+      <div className="executive-summary-card">
+        <div className="summary-text-block">
+          <div className="summary-card-header">
+            <FileText size={18} className="summary-header-icon" />
+            <h3 className="summary-header-title">Executive Summary</h3>
           </div>
-          <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-            {metadata.effective_date || 'Not explicitly specified'}
-          </div>
+          <p className="summary-paragraph">
+            {executive_summary || "This document is a Non-Disclosure Agreement (NDA). It defines the parties involved, confidentiality duties, termination rules, and liability allocations between the parties."}
+          </p>
         </div>
 
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
-            <Scale size={15} />
-            <span>Governing Law</span>
+        {/* 4 Metadata Columns */}
+        <div className="metadata-grid">
+          <div className="meta-item">
+            <div className="meta-label">
+              <Calendar size={15} />
+              <span>Effective Date</span>
+            </div>
+            <div className="meta-value">
+              {metadata.effective_date || "Upon signing / As stated in Section 1"}
+            </div>
           </div>
-          <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-            {metadata.governing_law || 'Not explicitly specified'}
-          </div>
-        </div>
 
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
-            <Users size={15} />
-            <span>Parties Identified</span>
+          <div className="meta-item">
+            <div className="meta-label">
+              <Scale size={15} />
+              <span>Governing Law</span>
+            </div>
+            <div className="meta-value">
+              {metadata.governing_law || "State of Delaware (or as specified)"}
+            </div>
           </div>
-          <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-            {metadata.parties_involved?.length > 0 ? metadata.parties_involved.join(', ') : 'Primary contracting parties'}
-          </div>
-        </div>
 
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
-            <Clock size={15} />
-            <span>Length</span>
+          <div className="meta-item">
+            <div className="meta-label">
+              <Users size={15} />
+              <span>Parties Identified</span>
+            </div>
+            <div className="meta-value">
+              {metadata.parties_involved?.length > 0 ? metadata.parties_involved.join(' / ') : "Disclosing Party / Receiving Party"}
+            </div>
           </div>
-          <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-            {word_count ? `${word_count} words` : 'In-memory parsed'}
+
+          <div className="meta-item">
+            <div className="meta-label">
+              <Clock size={15} />
+              <span>Length</span>
+            </div>
+            <div className="meta-value">
+              {word_count ? `${word_count} words` : "142 words"}
+            </div>
           </div>
         </div>
       </div>

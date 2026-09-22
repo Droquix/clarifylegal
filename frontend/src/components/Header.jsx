@@ -14,9 +14,9 @@ export default function Header({ theme, toggleTheme }) {
           </a>
 
           <div className="header-badges">
-            <div className="privacy-badge" title="No files are saved to disk or stored in any database.">
+            <div className="privacy-badge" title="ClarifyLegal does not save documents in an application database. Analysis is performed by the configured AI provider.">
               <ShieldCheck size={16} aria-hidden="true" />
-              <span>Zero Persistence Guarantee</span>
+              <span>No App Database Storage</span>
             </div>
 
             <button

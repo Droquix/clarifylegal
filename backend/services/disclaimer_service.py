@@ -46,5 +46,12 @@ def apply_disclaimer_guardrails(response_dict: dict) -> dict:
                 clause["plain_english"] = sanitize_informational_text(clause.get("plain_english", ""))
                 clause["potential_impact"] = sanitize_informational_text(clause.get("potential_impact", ""))
 
+    if "changes" in response_dict and isinstance(response_dict["changes"], list):
+        for change in response_dict["changes"]:
+            if isinstance(change, dict):
+                change["plain_english_impact"] = sanitize_informational_text(
+                    change.get("plain_english_impact", "")
+                )
+
     response_dict["disclaimer"] = MANDATORY_DISCLAIMER
     return response_dict

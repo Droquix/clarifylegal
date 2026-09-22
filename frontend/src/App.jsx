@@ -1,16 +1,30 @@
 import React, { useState, useEffect } from 'react';
-import Header from './components/Header';
-import LegalDisclaimerBanner from './components/LegalDisclaimerBanner';
-import DocumentUpload from './components/DocumentUpload';
+import Sidebar from './components/Sidebar';
 import AnalysisDashboard from './components/AnalysisDashboard';
+import DocumentUpload from './components/DocumentUpload';
+import DocumentComparison from './components/DocumentComparison';
+import RightSidebar from './components/RightSidebar';
+import LegalDisclaimerBanner from './components/LegalDisclaimerBanner';
 import { analyzeFile, analyzeText } from './utils/api';
+import { Sun, Moon, AlertTriangle, RefreshCw } from 'lucide-react';
+import { SAMPLE_DOCUMENTS } from './utils/sampleData';
 
 export default function App() {
-  const [theme, setTheme] = useState(() => localStorage.getItem('clarify_theme') || 'dark');
+  const [theme, setTheme] = useState(() => localStorage.getItem('clarify_theme') || 'light');
+  const [activeNav, setActiveNav] = useState('dashboard'); // 'dashboard' | 'upload' | 'compare'
   const [analysisData, setAnalysisData] = useState(null);
   const [originalText, setOriginalText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [resetKey, setResetKey] = useState(0);
+
+  // Safely initialize initial sample document analysis on mount if no analysis exists
+  useEffect(() => {
+    setIsLoading(false);
+    if (!analysisData) {
+      handleAnalyzeText(SAMPLE_DOCUMENTS[0].text);
+    }
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -27,8 +41,12 @@ export default function App() {
     try {
       const data = await analyzeFile(file);
       setAnalysisData(data);
+      if (data.extracted_text) {
+        setOriginalText(data.extracted_text);
+      }
+      setActiveNav('dashboard');
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to analyze file. Please check backend connection.');
+      setErrorMsg(err.message || 'Failed to analyze file. Please check file format or backend API configuration.');
     } finally {
       setIsLoading(false);
     }
@@ -37,77 +55,97 @@ export default function App() {
   const handleAnalyzeText = async (text) => {
     setIsLoading(true);
     setErrorMsg('');
-    setOriginalText(text);
     try {
       const data = await analyzeText(text);
       setAnalysisData(data);
+      setOriginalText(data.extracted_text || text);
+      setActiveNav('dashboard');
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to analyze legal text.');
+      setErrorMsg(err.message || 'Failed to analyze legal text. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Item 2: Fully reset all state — cleared summary, cleared clauses, cleared chat history, cleared file reference
   const handleReset = () => {
     setAnalysisData(null);
     setOriginalText('');
     setErrorMsg('');
+    setResetKey(prev => prev + 1);
+    setActiveNav('upload');
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <a href="#main-content" className="skip-to-content">
-        Skip to main content
-      </a>
+    <div className="app-layout">
+      {/* 1. Left Sidebar Navigation */}
+      <Sidebar activeNav={activeNav} setActiveNav={setActiveNav} />
 
-      <Header theme={theme} toggleTheme={toggleTheme} />
-      <LegalDisclaimerBanner />
+      {/* 2. Center Main Workspace Column */}
+      <div className="main-content-wrapper">
+        <header className="top-theme-header">
+          <button
+            onClick={toggleTheme}
+            className="theme-switch-btn"
+            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          >
+            {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+        </header>
 
-      <main id="main-content" style={{ flex: 1 }}>
-        {!analysisData ? (
-          <div>
-            <section className="hero-section container">
-              <h1 className="hero-title">
-                Understand Your Legal Documents in <span style={{ color: 'var(--accent-primary)' }}>Plain English</span>
-              </h1>
-              <p className="hero-subtitle">
-                Upload your contract, lease, or NDA. ClarifyLegal highlights key obligations, hidden red flags, and potential risks in simple terms with zero file persistence.
-              </p>
-            </section>
+        <main id="main-content" className="center-workspace">
+          {errorMsg && (
+            <div className="error-alert-banner" role="alert">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <AlertTriangle size={20} className="error-alert-icon" />
+                <span>{errorMsg}</span>
+              </div>
+              <button
+                onClick={() => setErrorMsg('')}
+                className="btn-dismiss-alert"
+                aria-label="Dismiss error"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
 
-            <DocumentUpload
-              onAnalyzeFile={handleAnalyzeFile}
-              onAnalyzeText={handleAnalyzeText}
+          {activeNav === 'upload' ? (
+            <div>
+              <section className="hero-section container">
+                <h1 className="hero-title">
+                  Understand Your Legal Documents in <span style={{ color: 'var(--accent-primary)' }}>Plain English</span>
+                </h1>
+                <p className="hero-subtitle">
+                  Upload your contract, lease, or NDA. ClarifyLegal highlights key obligations, hidden red flags, and potential risks in simple terms with zero file persistence.
+                </p>
+              </section>
+
+              <DocumentUpload
+                onAnalyzeFile={handleAnalyzeFile}
+                onAnalyzeText={handleAnalyzeText}
+                isLoading={isLoading}
+              />
+            </div>
+          ) : activeNav === 'compare' ? (
+            <DocumentComparison />
+          ) : (
+            <AnalysisDashboard
+              analysisData={analysisData}
+              onReset={handleReset}
               isLoading={isLoading}
             />
+          )}
+        </main>
+      </div>
 
-            {errorMsg && (
-              <div className="container" style={{ maxWidth: '800px', marginBottom: '2rem' }}>
-                <div role="alert" style={{ backgroundColor: 'var(--risk-high-bg)', color: 'var(--risk-high-text)', border: '1px solid var(--risk-high-border)', padding: '1rem', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
-                  {errorMsg}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <AnalysisDashboard
-            analysisData={analysisData}
-            originalText={originalText}
-            onReset={handleReset}
-          />
-        )}
-      </main>
-
-      <footer className="app-footer" role="contentinfo">
-        <div className="container">
-          <p style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-            ClarifyLegal — Privacy-First Legal Document Simplifier
-          </p>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Zero Document Storage Guarantee • Powered by Google Gemini 2.0 Flash • Informational Tool Only (Not Legal Advice)
-          </p>
-        </div>
-      </footer>
+      {/* 3. Right Sidebar Column */}
+      <RightSidebar
+        documentText={originalText}
+        onSwitchToCompare={() => setActiveNav('compare')}
+        resetKey={resetKey}
+      />
     </div>
   );
 }

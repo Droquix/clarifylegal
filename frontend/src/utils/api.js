@@ -57,3 +57,36 @@ export async function askQuestion(question, documentText) {
 
   return await response.json();
 }
+
+export async function compareFiles(originalFile, revisedFile) {
+  const formData = new FormData();
+  formData.append('original_file', originalFile);
+  formData.append('revised_file', revisedFile);
+
+  const response = await fetch(`${API_BASE_URL}/api/compare-files`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Document comparison failed (${response.status})`);
+  }
+
+  return await response.json();
+}
+
+export async function compareText(originalText, revisedText) {
+  const response = await fetch(`${API_BASE_URL}/api/compare-text`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ original_text: originalText, revised_text: revisedText }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Document comparison failed (${response.status})`);
+  }
+
+  return await response.json();
+}

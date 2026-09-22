@@ -1,6 +1,7 @@
 import io
 from pypdf import PdfReader
 from fastapi import HTTPException, status
+from backend.config import settings
 
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     """
@@ -14,8 +15,32 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
         )
 
     try:
+        if not pdf_bytes.startswith(b"%PDF-"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded file is not a valid PDF."
+            )
         buffer = io.BytesIO(pdf_bytes)
         reader = PdfReader(buffer)
+        if getattr(reader, "is_encrypted", False):
+            try:
+                decrypted = reader.decrypt("")
+                if not decrypted:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="This PDF document appears to be password-protected or encrypted. Please remove password protection or paste text directly."
+                    )
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="This PDF document appears to be password-protected or encrypted. Please remove password protection or paste text directly."
+                )
+
+        if len(reader.pages) > settings.MAX_PDF_PAGES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"PDF exceeds the {settings.MAX_PDF_PAGES}-page limit."
+            )
         extracted_pages = []
 
         for page_idx, page in enumerate(reader.pages):
