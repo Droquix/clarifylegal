@@ -3,7 +3,7 @@ ClarifyLegal FastAPI Backend Server
 
 Provides privacy-focused, in-memory legal document simplification, risk scoring,
 source-grounded Q&A, and side-by-side version comparison APIs. Includes response compression,
-sliding-window rate limiting, and dual route compatibility for Vercel/Render deployments.
+sliding-window rate limiting, and persistent process compatibility for Render hosting.
 """
 
 import time
@@ -26,10 +26,10 @@ from backend.models.schemas import (
     QAResponse,
 )
 from backend.services.pdf_service import extract_text_from_pdf_bytes, sanitize_and_clean_text
-from backend.services.gemini_service import (
-    analyze_document_with_gemini,
-    answer_question_with_gemini,
-    compare_documents_with_gemini,
+from backend.services.ai_service import (
+    analyze_document_with_ai,
+    answer_question_with_ai,
+    compare_documents_with_ai,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -37,17 +37,17 @@ logger = logging.getLogger("clarifylegal.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    key_present: bool = bool(settings.GEMINI_API_KEY)
+    key_present: bool = bool(settings.NVIDIA_API_KEY)
     logger.info("==================================================================")
     logger.info("ClarifyLegal API Starting Up...")
-    logger.info("AI provider key configured: %s", key_present)
+    logger.info("NVIDIA AI provider key configured: %s", key_present)
     logger.info("==================================================================")
     yield
     logger.info("ClarifyLegal API Shutting Down...")
 
 app: FastAPI = FastAPI(
     title="ClarifyLegal API",
-    description="In-memory legal document simplification API using a configured third-party AI provider.",
+    description="In-memory legal document simplification API powered by NVIDIA NIM (Meta Llama 3.2).",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -78,8 +78,9 @@ def health_check() -> Dict[str, Any]:
         "status": "healthy",
         "app": "ClarifyLegal API",
         "version": "1.0.0",
-        "processing_notice": "Documents are not stored in an application database and are sent to the configured AI provider for analysis.",
-        "ai_provider_configured": bool(settings.GEMINI_API_KEY)
+        "ai_provider": "NVIDIA NIM (Meta Llama 3.2)",
+        "processing_notice": "Documents are not stored in an application database and are processed in-memory.",
+        "ai_provider_configured": bool(settings.NVIDIA_API_KEY)
     }
 
 
@@ -134,7 +135,7 @@ async def analyze_document_file(file: UploadFile = File(...)):
 
     clean_text: str = await clean_uploaded_document(file)
 
-    analysis_result: Dict[str, Any] = await run_in_threadpool(analyze_document_with_gemini, clean_text)
+    analysis_result: Dict[str, Any] = await run_in_threadpool(analyze_document_with_ai, clean_text)
     analysis_result["extracted_text"] = clean_text
     elapsed: float = time.time() - start_time
     analysis_result["processing_time_seconds"] = round(elapsed, 2)
@@ -161,7 +162,7 @@ async def analyze_document_text(payload: TextAnalysisRequest):
             detail=f"Pasted text exceeds the {settings.MAX_DOCUMENT_CHARS:,}-character limit."
         )
 
-    analysis_result: Dict[str, Any] = await run_in_threadpool(analyze_document_with_gemini, clean_text)
+    analysis_result: Dict[str, Any] = await run_in_threadpool(analyze_document_with_ai, clean_text)
     analysis_result["extracted_text"] = clean_text
     elapsed: float = time.time() - start_time
     analysis_result["processing_time_seconds"] = round(elapsed, 2)
@@ -181,7 +182,7 @@ async def ask_document_question(payload: QARequest):
         )
 
     logger.info("POST /api/qa received. Document text length: %s chars", len(payload.document_text))
-    qa_result: Dict[str, Any] = await run_in_threadpool(answer_question_with_gemini, payload.question, payload.document_text)
+    qa_result: Dict[str, Any] = await run_in_threadpool(answer_question_with_ai, payload.question, payload.document_text)
     return qa_result
 
 
@@ -198,7 +199,7 @@ async def compare_document_text(payload: DocumentComparisonRequest):
         )
 
     start_time: float = time.time()
-    comparison: Dict[str, Any] = await run_in_threadpool(compare_documents_with_gemini, original_text, revised_text)
+    comparison: Dict[str, Any] = await run_in_threadpool(compare_documents_with_ai, original_text, revised_text)
     comparison["processing_time_seconds"] = round(time.time() - start_time, 2)
     return comparison
 
@@ -213,6 +214,6 @@ async def compare_document_files(
     original_text: str = await clean_uploaded_document(original_file)
     revised_text: str = await clean_uploaded_document(revised_file)
     start_time: float = time.time()
-    comparison: Dict[str, Any] = await run_in_threadpool(compare_documents_with_gemini, original_text, revised_text)
+    comparison: Dict[str, Any] = await run_in_threadpool(compare_documents_with_ai, original_text, revised_text)
     comparison["processing_time_seconds"] = round(time.time() - start_time, 2)
     return comparison

@@ -1,8 +1,8 @@
 """
-ClarifyLegal AI Core Service
+ClarifyLegal NVIDIA AI Provider Service
 
-Integrates with NVIDIA NIM and Google Gemini APIs to provide document analysis,
-legal clause simplification, version comparison, and grounded Q&A. Includes sentence-aligned
+Integrates with NVIDIA NIM APIs hosting Meta Llama 3.2 models to provide document analysis,
+legal clause simplification, contract comparison, and grounded Q&A. Includes sentence-aligned
 document chunking, in-memory response caching, and structured JSON repair.
 """
 
@@ -12,9 +12,7 @@ import re
 import time
 import hashlib
 import httpx
-from typing import Dict, Any, Optional, List, Tuple
-from google import genai
-from google.genai import types
+from typing import Dict, Any, Optional, List
 from fastapi import HTTPException, status
 
 from backend.config import settings
@@ -24,7 +22,7 @@ from backend.services.disclaimer_service import (
     sanitize_informational_text
 )
 
-logger = logging.getLogger("clarifylegal.gemini")
+logger = logging.getLogger("clarifylegal.ai_service")
 
 SYSTEM_PROMPT: str = """
 You are ClarifyLegal AI, an assistant that translates legal documents into clear, plain English for non-lawyers.
@@ -61,7 +59,6 @@ class ResponseCache:
     def set(self, prefix: str, data: Dict[str, Any], *args: str) -> None:
         key = self._make_key(prefix, *args)
         if len(self._cache) >= self.max_size:
-            # Evict oldest key
             first_key = next(iter(self._cache))
             del self._cache[first_key]
         self._cache[key] = data
@@ -71,7 +68,7 @@ response_cache: ResponseCache = ResponseCache(max_size=100)
 
 def chunk_document_text(text: str, max_chunk_size: int = 12000, overlap: int = 1000) -> List[str]:
     """
-    Splits long legal document text into overlapping sentence-aligned chunks to fit model context limits.
+    Splits long legal document text into overlapping sentence-aligned chunks.
 
     Args:
         text (str): Raw input legal contract text.
@@ -91,7 +88,6 @@ def chunk_document_text(text: str, max_chunk_size: int = 12000, overlap: int = 1
     while start < text_len:
         end: int = min(start + max_chunk_size, text_len)
         if end < text_len:
-            # Break at sentence or paragraph boundary
             period_idx = text.rfind(". ", start + max_chunk_size // 2, end)
             newline_idx = text.rfind("\n", start + max_chunk_size // 2, end)
             break_point = max(period_idx, newline_idx)
@@ -233,19 +229,21 @@ def _ground_analysis(data: Dict[str, Any], document_text: str) -> Dict[str, Any]
 
 def _call_nvidia_api(prompt: str) -> str:
     """
-    Executes completion request against NVIDIA API endpoint (OpenAI compatible).
-    Loops through available active models if primary choice returns an error.
+    Executes completion request against NVIDIA AI Foundation API endpoint (OpenAI compatible).
+    URL: https://integrate.api.nvidia.com/v1/chat/completions
+    Primary Model: meta/llama-3.2-11b-vision-instruct
+    Loops through available candidate models if primary choice returns an error.
     """
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {settings.GEMINI_API_KEY}",
+        "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
 
     candidate_models = []
-    if settings.GEMINI_MODEL and not settings.GEMINI_MODEL.startswith("gemini"):
-        candidate_models.append(settings.GEMINI_MODEL)
+    if settings.NVIDIA_MODEL:
+        candidate_models.append(settings.NVIDIA_MODEL)
 
     candidate_models.extend([
         "meta/llama-3.2-11b-vision-instruct",
@@ -280,12 +278,12 @@ def _call_nvidia_api(prompt: str) -> str:
                 logger.warning(f"NVIDIA API model {model_name} exception: {str(exc)}")
                 last_error = str(exc)
 
-    raise RuntimeError(f"All NVIDIA model attempts failed. Last error: {last_error}")
+    raise RuntimeError(f"All NVIDIA NIM model attempts failed. Last error: {last_error}")
 
 
-def analyze_document_with_gemini(document_text: str) -> Dict[str, Any]:
+def analyze_document_with_ai(document_text: str) -> Dict[str, Any]:
     """
-    Analyzes legal document using AI model. Checks in-memory cache first,
+    Analyzes legal document using NVIDIA NIM Llama 3.2 model. Checks in-memory cache first,
     chunks long documents (>12,000 chars), and merges extracted clauses.
 
     Args:
@@ -294,14 +292,13 @@ def analyze_document_with_gemini(document_text: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Analysis dict containing summary, risk score, and clauses.
     """
-    key_configured = bool(settings.GEMINI_API_KEY)
-    is_nvidia_key = settings.GEMINI_API_KEY.startswith("nvapi-")
-    logger.info("Document analysis requested. Configured: %s | NVIDIA Key: %s", key_configured, is_nvidia_key)
+    key_configured = bool(settings.NVIDIA_API_KEY)
+    logger.info("Document analysis requested. NVIDIA Key Configured: %s", key_configured)
 
     if not key_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Document analysis is unavailable until an AI provider key is configured."
+            detail="Document analysis is unavailable until an NVIDIA API key is configured."
         )
 
     # Check in-memory LRU cache
@@ -352,21 +349,7 @@ Please analyze the above document content and return a JSON object with this EXA
 """
 
     try:
-        if is_nvidia_key:
-            response_text = _call_nvidia_api(prompt)
-        else:
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            logger.info(f"Sending document analysis prompt to Google Gemini API (model: {settings.GEMINI_MODEL})...")
-            response = client.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.2,
-                )
-            )
-            response_text = response.text.strip()
-
+        response_text = _call_nvidia_api(prompt)
         parsed_data = extract_json_from_text(response_text)
         data = _ground_analysis(parsed_data, document_text)
         data["extracted_text"] = document_text
@@ -386,9 +369,9 @@ Please analyze the above document content and return a JSON object with this EXA
         )
 
 
-def answer_question_with_gemini(question: str, document_text: str) -> Dict[str, Any]:
+def answer_question_with_ai(question: str, document_text: str) -> Dict[str, Any]:
     """
-    Answers user questions about an uploaded legal document in plain English.
+    Answers user questions about an uploaded legal document in plain English using NVIDIA NIM.
     Checks in-memory LRU cache first to prevent duplicate LLM calls.
 
     Args:
@@ -398,14 +381,13 @@ def answer_question_with_gemini(question: str, document_text: str) -> Dict[str, 
     Returns:
         Dict[str, Any]: Structured Q&A response dictionary.
     """
-    key_configured = bool(settings.GEMINI_API_KEY)
-    is_nvidia_key = settings.GEMINI_API_KEY.startswith("nvapi-")
-    logger.info("Document Q&A requested. Provider configured: %s | NVIDIA Key: %s | Context len: %s", key_configured, is_nvidia_key, len(document_text))
+    key_configured = bool(settings.NVIDIA_API_KEY)
+    logger.info("Document Q&A requested. NVIDIA Key Configured: %s | Context len: %s", key_configured, len(document_text))
 
     if not key_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="API key is missing. Please set GEMINI_API_KEY in your backend/.env file to enable Q&A."
+            detail="API key is missing. Please set NVIDIA_API_KEY in your backend/.env file to enable Q&A."
         )
 
     # Check in-memory LRU cache
@@ -436,20 +418,7 @@ Respond in valid JSON format:
 }}
 """
     try:
-        if is_nvidia_key:
-            response_text = _call_nvidia_api(prompt)
-        else:
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.3,
-                )
-            )
-            response_text = response.text.strip()
-
+        response_text = _call_nvidia_api(prompt)
         data = extract_json_from_text(response_text)
         answer = sanitize_informational_text(data.get("answer", ""))
         final_result = {
@@ -474,9 +443,9 @@ Respond in valid JSON format:
         )
 
 
-def compare_documents_with_gemini(original_text: str, revised_text: str) -> Dict[str, Any]:
+def compare_documents_with_ai(original_text: str, revised_text: str) -> Dict[str, Any]:
     """
-    Compares two contract versions and identifies additions, deletions, and modifications.
+    Compares two contract versions and identifies additions, deletions, and modifications using NVIDIA NIM.
     Checks in-memory LRU cache first.
 
     Args:
@@ -486,13 +455,12 @@ def compare_documents_with_gemini(original_text: str, revised_text: str) -> Dict
     Returns:
         Dict[str, Any]: Structured comparison summary and visual diff items.
     """
-    key_configured = bool(settings.GEMINI_API_KEY)
-    is_nvidia_key = settings.GEMINI_API_KEY.startswith("nvapi-")
+    key_configured = bool(settings.NVIDIA_API_KEY)
 
     if not key_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Document comparison is unavailable until an AI provider key is configured."
+            detail="Document comparison is unavailable until an NVIDIA API key is configured."
         )
 
     # Check in-memory LRU cache
@@ -537,20 +505,7 @@ Return ONLY a valid JSON object matching this EXACT structure:
 }}
 """
     try:
-        if is_nvidia_key:
-            response_text = _call_nvidia_api(prompt)
-        else:
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.2,
-                )
-            )
-            response_text = response.text.strip()
-
+        response_text = _call_nvidia_api(prompt)
         raw_data = extract_json_from_text(response_text)
 
         summary_raw = raw_data.get("summary", {})
