@@ -443,10 +443,68 @@ Respond in valid JSON format:
         )
 
 
+def _detect_document_type_mismatch(original_text: str, revised_text: str) -> Optional[Dict[str, Any]]:
+    """
+    Detects if two uploaded documents represent fundamentally incompatible legal agreement types
+    (e.g., comparing an Employment Agreement with a Personal Loan Agreement).
+    Prevents generating fake added/removed/modified revision diffs between unrelated contracts.
+    """
+    orig_lower = original_text.lower()
+    rev_lower = revised_text.lower()
+
+    doc_types = [
+        ("employment", ["employment agreement", "employee", "salary", "job duties", "employment contract", "employer"]),
+        ("loan", ["loan agreement", "promissory note", "lender", "borrower", "principal amount", "interest rate"]),
+        ("lease", ["lease agreement", "tenant", "landlord", "rent payment", "premises"]),
+        ("nda", ["non-disclosure", "confidentiality agreement", "disclosing party", "receiving party", "proprietary information"])
+    ]
+
+    orig_type = None
+    rev_type = None
+
+    for name, keywords in doc_types:
+        matches = sum(1 for kw in keywords if kw in orig_lower)
+        if matches >= 2 and not orig_type:
+            orig_type = name
+
+    for name, keywords in doc_types:
+        matches = sum(1 for kw in keywords if kw in rev_lower)
+        if matches >= 2 and not rev_type:
+            rev_type = name
+
+    if orig_type and rev_type and orig_type != rev_type:
+        type_names = {
+            "employment": "Employment Agreement",
+            "loan": "Personal Loan Agreement",
+            "lease": "Lease Agreement",
+            "nda": "Non-Disclosure Agreement (NDA)"
+        }
+        name_orig = type_names.get(orig_type, orig_type.title())
+        name_rev = type_names.get(rev_type, rev_type.title())
+
+        logger.info("Document type mismatch detected: %s vs %s", name_orig, name_rev)
+        return {
+            "summary": {
+                "overview": (
+                    f"Document Type Mismatch Detected: The original file appears to be an '{name_orig}' "
+                    f"while the revised file is a '{name_rev}'. Version comparison cannot be performed between "
+                    f"two fundamentally different legal agreement types. Please upload two revisions of the same agreement."
+                ),
+                "material_change_count": 0,
+                "higher_risk_changes": 0
+            },
+            "changes": [],
+            "is_mismatch": True,
+            "disclaimer": MANDATORY_DISCLAIMER
+        }
+
+    return None
+
+
 def compare_documents_with_ai(original_text: str, revised_text: str) -> Dict[str, Any]:
     """
     Compares two contract versions and identifies additions, deletions, and modifications using NVIDIA NIM.
-    Checks in-memory LRU cache first.
+    Checks in-memory LRU cache first and validates document type compatibility.
 
     Args:
         original_text (str): Version A contract text.
@@ -462,6 +520,11 @@ def compare_documents_with_ai(original_text: str, revised_text: str) -> Dict[str
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Document comparison is unavailable until an NVIDIA API key is configured."
         )
+
+    # Check for document type mismatch before comparison
+    mismatch_result = _detect_document_type_mismatch(original_text, revised_text)
+    if mismatch_result:
+        return mismatch_result
 
     # Check in-memory LRU cache
     cached_result = response_cache.get("compare", original_text, revised_text)
