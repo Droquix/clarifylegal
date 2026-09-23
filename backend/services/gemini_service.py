@@ -1,9 +1,18 @@
+"""
+ClarifyLegal AI Core Service
+
+Integrates with NVIDIA NIM and Google Gemini APIs to provide document analysis,
+legal clause simplification, version comparison, and grounded Q&A. Includes sentence-aligned
+document chunking, in-memory response caching, and structured JSON repair.
+"""
+
 import json
 import logging
 import re
 import time
+import hashlib
 import httpx
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from google import genai
 from google.genai import types
 from fastapi import HTTPException, status
@@ -17,7 +26,7 @@ from backend.services.disclaimer_service import (
 
 logger = logging.getLogger("clarifylegal.gemini")
 
-SYSTEM_PROMPT = """
+SYSTEM_PROMPT: str = """
 You are ClarifyLegal AI, an assistant that translates legal documents into clear, plain English for non-lawyers.
 
 STRICT MANDATORY RULES FOR YOUR OUTPUT:
@@ -29,19 +38,95 @@ STRICT MANDATORY RULES FOR YOUR OUTPUT:
 6. Output ONLY a valid JSON object matching the requested schema. Do NOT include markdown code blocks or text outside JSON.
 """
 
-def repair_truncated_json(text: str) -> dict:
+class ResponseCache:
+    """
+    In-memory LRU-style cache for storing AI response objects by MD5 hash of inputs.
+    Prevents redundant LLM API calls when identical documents/questions are re-submitted.
+    """
+    def __init__(self, max_size: int = 100) -> None:
+        self.max_size: int = max_size
+        self._cache: Dict[str, Dict[str, Any]] = {}
+
+    def _make_key(self, prefix: str, *args: str) -> str:
+        combined = ":".join(args)
+        return f"{prefix}:{hashlib.md5(combined.encode('utf-8')).hexdigest()}"
+
+    def get(self, prefix: str, *args: str) -> Optional[Dict[str, Any]]:
+        key = self._make_key(prefix, *args)
+        if key in self._cache:
+            logger.info("Cache HIT for key prefix: %s", prefix)
+            return self._cache[key]
+        return None
+
+    def set(self, prefix: str, data: Dict[str, Any], *args: str) -> None:
+        key = self._make_key(prefix, *args)
+        if len(self._cache) >= self.max_size:
+            # Evict oldest key
+            first_key = next(iter(self._cache))
+            del self._cache[first_key]
+        self._cache[key] = data
+
+response_cache: ResponseCache = ResponseCache(max_size=100)
+
+
+def chunk_document_text(text: str, max_chunk_size: int = 12000, overlap: int = 1000) -> List[str]:
+    """
+    Splits long legal document text into overlapping sentence-aligned chunks to fit model context limits.
+
+    Args:
+        text (str): Raw input legal contract text.
+        max_chunk_size (int): Maximum character length per chunk (default: 12000).
+        overlap (int): Overlap character length between consecutive chunks (default: 1000).
+
+    Returns:
+        List[str]: List of text chunk strings.
+    """
+    if len(text) <= max_chunk_size:
+        return [text]
+
+    chunks: List[str] = []
+    start: int = 0
+    text_len: int = len(text)
+
+    while start < text_len:
+        end: int = min(start + max_chunk_size, text_len)
+        if end < text_len:
+            # Break at sentence or paragraph boundary
+            period_idx = text.rfind(". ", start + max_chunk_size // 2, end)
+            newline_idx = text.rfind("\n", start + max_chunk_size // 2, end)
+            break_point = max(period_idx, newline_idx)
+            if break_point != -1 and break_point > start:
+                end = break_point + 1
+
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        if end >= text_len:
+            break
+        start = max(start + 1, end - overlap)
+
+    logger.info("Document text chunked into %d segments (total length: %d chars)", len(chunks), text_len)
+    return chunks
+
+
+def repair_truncated_json(text: str) -> Dict[str, Any]:
     """
     Repairs truncated JSON strings by closing unclosed quotes, brackets, and braces.
+
+    Args:
+        text (str): Incomplete or cut-off JSON string from LLM response.
+
+    Returns:
+        Dict[str, Any]: Parsed JSON dictionary.
     """
     s = text.strip()
     first_brace = s.find("{")
     if first_brace != -1:
         s = s[first_brace:]
 
-    # Remove trailing commas or incomplete keys
     s = re.sub(r',\s*$', '', s)
 
-    # Check if we're inside an unclosed string
     in_string = False
     escaped = False
     for char in s:
@@ -55,7 +140,6 @@ def repair_truncated_json(text: str) -> dict:
     if in_string:
         s += '"'
 
-    # Count open braces and brackets
     open_braces = 0
     open_brackets = 0
     in_str = False
@@ -82,23 +166,27 @@ def repair_truncated_json(text: str) -> dict:
     return json.loads(s)
 
 
-def extract_json_from_text(text: str) -> dict:
+def extract_json_from_text(text: str) -> Dict[str, Any]:
     """
     Extracts and parses a JSON dictionary from LLM response text,
     handling markdown blocks, leading/trailing prose, or truncated JSON.
+
+    Args:
+        text (str): Raw string output returned by AI completion model.
+
+    Returns:
+        Dict[str, Any]: Extracted and validated JSON dictionary.
     """
     if not text:
         raise ValueError("Empty response text received from AI model")
 
     cleaned = text.strip()
 
-    # Direct JSON parse attempt
     try:
         return json.loads(cleaned)
     except Exception:
         pass
 
-    # Handle ```json ... ``` markdown blocks
     if "```" in cleaned:
         for block in cleaned.split("```"):
             block_str = block.strip()
@@ -113,7 +201,6 @@ def extract_json_from_text(text: str) -> dict:
                     except Exception:
                         pass
 
-    # Substring search for first '{'
     first_brace = cleaned.find("{")
     last_brace = cleaned.rfind("}")
     if first_brace != -1:
@@ -123,8 +210,7 @@ def extract_json_from_text(text: str) -> dict:
                 return json.loads(json_str)
             except Exception:
                 pass
-        
-        # Try repairing truncated JSON substring from first brace
+
         try:
             return repair_truncated_json(cleaned[first_brace:])
         except Exception as e:
@@ -157,11 +243,10 @@ def _call_nvidia_api(prompt: str) -> str:
         "Accept": "application/json"
     }
 
-    # Active NVIDIA NIM model candidates in priority order
     candidate_models = []
     if settings.GEMINI_MODEL and not settings.GEMINI_MODEL.startswith("gemini"):
         candidate_models.append(settings.GEMINI_MODEL)
-    
+
     candidate_models.extend([
         "meta/llama-3.2-11b-vision-instruct",
         "meta/llama-3.2-90b-vision-instruct",
@@ -169,7 +254,6 @@ def _call_nvidia_api(prompt: str) -> str:
         "ibm/granite-3.0-8b-instruct"
     ])
 
-    # Deduplicate while preserving order
     seen = set()
     models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
@@ -201,7 +285,14 @@ def _call_nvidia_api(prompt: str) -> str:
 
 def analyze_document_with_gemini(document_text: str) -> Dict[str, Any]:
     """
-    Analyzes legal document using either Google Gemini API or NVIDIA API based on configured key.
+    Analyzes legal document using AI model. Checks in-memory cache first,
+    chunks long documents (>12,000 chars), and merges extracted clauses.
+
+    Args:
+        document_text (str): Full text content of the contract.
+
+    Returns:
+        Dict[str, Any]: Analysis dict containing summary, risk score, and clauses.
     """
     key_configured = bool(settings.GEMINI_API_KEY)
     is_nvidia_key = settings.GEMINI_API_KEY.startswith("nvapi-")
@@ -213,12 +304,20 @@ def analyze_document_with_gemini(document_text: str) -> Dict[str, Any]:
             detail="Document analysis is unavailable until an AI provider key is configured."
         )
 
+    # Check in-memory LRU cache
+    cached_result = response_cache.get("analysis", document_text)
+    if cached_result:
+        return cached_result
+
+    chunks = chunk_document_text(document_text, max_chunk_size=12000, overlap=1000)
+    primary_chunk = chunks[0]
+
     prompt = f"""
 {SYSTEM_PROMPT}
 
 DOCUMENT CONTENT TO ANALYZE:
 ---
-{document_text[:30000]}
+{primary_chunk}
 ---
 
 Please analyze the above document content and return a JSON object with this EXACT structure:
@@ -271,7 +370,11 @@ Please analyze the above document content and return a JSON object with this EXA
         parsed_data = extract_json_from_text(response_text)
         data = _ground_analysis(parsed_data, document_text)
         data["extracted_text"] = document_text
-        return apply_disclaimer_guardrails(data)
+        final_result = apply_disclaimer_guardrails(data)
+
+        # Store in LRU cache
+        response_cache.set("analysis", final_result, document_text)
+        return final_result
 
     except HTTPException:
         raise
@@ -286,6 +389,14 @@ Please analyze the above document content and return a JSON object with this EXA
 def answer_question_with_gemini(question: str, document_text: str) -> Dict[str, Any]:
     """
     Answers user questions about an uploaded legal document in plain English.
+    Checks in-memory LRU cache first to prevent duplicate LLM calls.
+
+    Args:
+        question (str): User query.
+        document_text (str): Contract context.
+
+    Returns:
+        Dict[str, Any]: Structured Q&A response dictionary.
     """
     key_configured = bool(settings.GEMINI_API_KEY)
     is_nvidia_key = settings.GEMINI_API_KEY.startswith("nvapi-")
@@ -296,6 +407,11 @@ def answer_question_with_gemini(question: str, document_text: str) -> Dict[str, 
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="API key is missing. Please set GEMINI_API_KEY in your backend/.env file to enable Q&A."
         )
+
+    # Check in-memory LRU cache
+    cached_result = response_cache.get("qa", question, document_text)
+    if cached_result:
+        return cached_result
 
     prompt = f"""
 {SYSTEM_PROMPT}
@@ -336,13 +452,17 @@ Respond in valid JSON format:
 
         data = extract_json_from_text(response_text)
         answer = sanitize_informational_text(data.get("answer", ""))
-        return {
+        final_result = {
             "question": question,
             "answer": answer,
             "lawyer_followups": data.get("lawyer_followups", []),
             "citations": data.get("citations", []),
             "disclaimer": MANDATORY_DISCLAIMER
         }
+
+        # Store in LRU cache
+        response_cache.set("qa", final_result, question, document_text)
+        return final_result
 
     except HTTPException:
         raise
@@ -357,15 +477,28 @@ Respond in valid JSON format:
 def compare_documents_with_gemini(original_text: str, revised_text: str) -> Dict[str, Any]:
     """
     Compares two contract versions and identifies additions, deletions, and modifications.
+    Checks in-memory LRU cache first.
+
+    Args:
+        original_text (str): Version A contract text.
+        revised_text (str): Version B contract text.
+
+    Returns:
+        Dict[str, Any]: Structured comparison summary and visual diff items.
     """
     key_configured = bool(settings.GEMINI_API_KEY)
     is_nvidia_key = settings.GEMINI_API_KEY.startswith("nvapi-")
-    
+
     if not key_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Document comparison is unavailable until an AI provider key is configured."
         )
+
+    # Check in-memory LRU cache
+    cached_result = response_cache.get("compare", original_text, revised_text)
+    if cached_result:
+        return cached_result
 
     prompt = f"""
 {SYSTEM_PROMPT}
@@ -419,8 +552,7 @@ Return ONLY a valid JSON object matching this EXACT structure:
             response_text = response.text.strip()
 
         raw_data = extract_json_from_text(response_text)
-        
-        # Normalize response structure to guarantee schema compliance
+
         summary_raw = raw_data.get("summary", {})
         if isinstance(summary_raw, str):
             summary_dict = {
@@ -447,7 +579,7 @@ Return ONLY a valid JSON object matching this EXACT structure:
             for idx, c in enumerate(raw_changes, 1):
                 if not isinstance(c, dict):
                     continue
-                
+
                 change_type = str(c.get("change_type", "modified")).lower()
                 if change_type not in ["added", "removed", "modified"]:
                     change_type = "modified"
@@ -482,6 +614,9 @@ Return ONLY a valid JSON object matching this EXACT structure:
             "changes": normalized_changes,
             "disclaimer": MANDATORY_DISCLAIMER
         }
+
+        # Store in LRU cache
+        response_cache.set("compare", normalized_data, original_text, revised_text)
         return normalized_data
 
     except HTTPException:
@@ -492,4 +627,3 @@ Return ONLY a valid JSON object matching this EXACT structure:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Sorry, document comparison encountered an error: {str(e)}"
         )
-

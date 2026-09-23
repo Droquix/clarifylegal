@@ -1,12 +1,23 @@
+"""
+ClarifyLegal FastAPI Backend Server
+
+Provides privacy-focused, in-memory legal document simplification, risk scoring,
+source-grounded Q&A, and side-by-side version comparison APIs. Includes response compression,
+sliding-window rate limiting, and dual route compatibility for Vercel/Render deployments.
+"""
+
 import time
 import logging
 from contextlib import asynccontextmanager
+from typing import Dict, Any
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from backend.config import settings
+from backend.middleware.rate_limiter import RateLimitMiddleware
 from backend.models.schemas import (
     AnalysisResponse,
     ComparisonResponse,
@@ -21,13 +32,12 @@ from backend.services.gemini_service import (
     compare_documents_with_gemini,
 )
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("clarifylegal.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    key_present = bool(settings.GEMINI_API_KEY)
+    key_present: bool = bool(settings.GEMINI_API_KEY)
     logger.info("==================================================================")
     logger.info("ClarifyLegal API Starting Up...")
     logger.info("AI provider key configured: %s", key_present)
@@ -35,14 +45,20 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("ClarifyLegal API Shutting Down...")
 
-app = FastAPI(
+app: FastAPI = FastAPI(
     title="ClarifyLegal API",
     description="In-memory legal document simplification API using a configured third-party AI provider.",
     version="1.0.0",
     lifespan=lifespan
 )
 
-# CORS setup
+# 1. GZip Response Compression Middleware
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# 2. Per-IP Sliding-Window Rate Limiting Middleware (15 requests/min per IP)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=15)
+
+# 3. Cross-Origin Resource Sharing (CORS) Setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -56,7 +72,7 @@ class TextAnalysisRequest(BaseModel):
 
 @app.get("/health")
 @app.get("/api/health")
-def health_check():
+def health_check() -> Dict[str, Any]:
     """Health check endpoint displaying API status and configuration."""
     return {
         "status": "healthy",
@@ -72,14 +88,14 @@ async def clean_uploaded_document(file: UploadFile) -> str:
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No filename provided in upload.")
 
-    filename_lower = file.filename.lower()
+    filename_lower: str = file.filename.lower()
     if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".txt")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported file format. Please upload a .pdf or .txt file."
         )
 
-    file_bytes = await file.read()
+    file_bytes: bytes = await file.read()
     if len(file_bytes) > settings.MAX_FILE_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -87,14 +103,14 @@ async def clean_uploaded_document(file: UploadFile) -> str:
         )
 
     if filename_lower.endswith(".pdf"):
-        extracted_text = extract_text_from_pdf_bytes(file_bytes)
+        extracted_text: str = extract_text_from_pdf_bytes(file_bytes)
     else:
         try:
             extracted_text = file_bytes.decode("utf-8")
         except UnicodeDecodeError:
             extracted_text = file_bytes.decode("latin-1")
 
-    clean_text = sanitize_and_clean_text(extracted_text)
+    clean_text: str = sanitize_and_clean_text(extracted_text)
     if len(clean_text) > settings.MAX_DOCUMENT_CHARS:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -114,13 +130,13 @@ async def analyze_document_file(file: UploadFile = File(...)):
     Parses uploaded PDF or text file strictly in memory, extracts content,
     and generates plain-English analysis with risk scores and clause breakdowns.
     """
-    start_time = time.time()
+    start_time: float = time.time()
 
-    clean_text = await clean_uploaded_document(file)
+    clean_text: str = await clean_uploaded_document(file)
 
-    analysis_result = await run_in_threadpool(analyze_document_with_gemini, clean_text)
+    analysis_result: Dict[str, Any] = await run_in_threadpool(analyze_document_with_gemini, clean_text)
     analysis_result["extracted_text"] = clean_text
-    elapsed = time.time() - start_time
+    elapsed: float = time.time() - start_time
     analysis_result["processing_time_seconds"] = round(elapsed, 2)
 
     return analysis_result
@@ -131,8 +147,8 @@ async def analyze_document_text(payload: TextAnalysisRequest):
     """
     Analyzes raw text pasted directly by the user.
     """
-    start_time = time.time()
-    clean_text = sanitize_and_clean_text(payload.text)
+    start_time: float = time.time()
+    clean_text: str = sanitize_and_clean_text(payload.text)
 
     if not clean_text or len(clean_text) < 20:
         raise HTTPException(
@@ -145,9 +161,9 @@ async def analyze_document_text(payload: TextAnalysisRequest):
             detail=f"Pasted text exceeds the {settings.MAX_DOCUMENT_CHARS:,}-character limit."
         )
 
-    analysis_result = await run_in_threadpool(analyze_document_with_gemini, clean_text)
+    analysis_result: Dict[str, Any] = await run_in_threadpool(analyze_document_with_gemini, clean_text)
     analysis_result["extracted_text"] = clean_text
-    elapsed = time.time() - start_time
+    elapsed: float = time.time() - start_time
     analysis_result["processing_time_seconds"] = round(elapsed, 2)
 
     return analysis_result
@@ -165,7 +181,7 @@ async def ask_document_question(payload: QARequest):
         )
 
     logger.info("POST /api/qa received. Document text length: %s chars", len(payload.document_text))
-    qa_result = await run_in_threadpool(answer_question_with_gemini, payload.question, payload.document_text)
+    qa_result: Dict[str, Any] = await run_in_threadpool(answer_question_with_gemini, payload.question, payload.document_text)
     return qa_result
 
 
@@ -173,16 +189,16 @@ async def ask_document_question(payload: QARequest):
 @app.post("/compare-text", response_model=ComparisonResponse)
 async def compare_document_text(payload: DocumentComparisonRequest):
     """Compare pasted original and revised documents using source-backed AI output."""
-    original_text = sanitize_and_clean_text(payload.original_text)
-    revised_text = sanitize_and_clean_text(payload.revised_text)
+    original_text: str = sanitize_and_clean_text(payload.original_text)
+    revised_text: str = sanitize_and_clean_text(payload.revised_text)
     if len(original_text) < 20 or len(revised_text) < 20:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Both original and revised text must contain at least 20 characters."
         )
 
-    start_time = time.time()
-    comparison = await run_in_threadpool(compare_documents_with_gemini, original_text, revised_text)
+    start_time: float = time.time()
+    comparison: Dict[str, Any] = await run_in_threadpool(compare_documents_with_gemini, original_text, revised_text)
     comparison["processing_time_seconds"] = round(time.time() - start_time, 2)
     return comparison
 
@@ -194,9 +210,9 @@ async def compare_document_files(
     revised_file: UploadFile = File(...),
 ):
     """Compare uploaded PDF or TXT document versions without persisting either file."""
-    original_text = await clean_uploaded_document(original_file)
-    revised_text = await clean_uploaded_document(revised_file)
-    start_time = time.time()
-    comparison = await run_in_threadpool(compare_documents_with_gemini, original_text, revised_text)
+    original_text: str = await clean_uploaded_document(original_file)
+    revised_text: str = await clean_uploaded_document(revised_file)
+    start_time: float = time.time()
+    comparison: Dict[str, Any] = await run_in_threadpool(compare_documents_with_gemini, original_text, revised_text)
     comparison["processing_time_seconds"] = round(time.time() - start_time, 2)
     return comparison

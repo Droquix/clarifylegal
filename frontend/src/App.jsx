@@ -1,13 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import Sidebar from './components/Sidebar';
-import AnalysisDashboard from './components/AnalysisDashboard';
 import DocumentUpload from './components/DocumentUpload';
-import DocumentComparison from './components/DocumentComparison';
-import RightSidebar from './components/RightSidebar';
-import LegalDisclaimerBanner from './components/LegalDisclaimerBanner';
 import { analyzeFile, analyzeText } from './utils/api';
-import { Sun, Moon, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Sun, Moon, AlertTriangle } from 'lucide-react';
 import { SAMPLE_DOCUMENTS } from './utils/sampleData';
+
+// Lazy-load non-initial dashboard components to optimize initial JS bundle size
+const AnalysisDashboard = lazy(() => import('./components/AnalysisDashboard'));
+const DocumentComparison = lazy(() => import('./components/DocumentComparison'));
+const RightSidebar = lazy(() => import('./components/RightSidebar'));
 
 export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('clarify_theme') || 'light');
@@ -18,7 +19,7 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState('');
   const [resetKey, setResetKey] = useState(0);
 
-  // Safely initialize initial sample document analysis on mount if no analysis exists
+  // Initialize sample document analysis on mount if no active analysis exists
   useEffect(() => {
     setIsLoading(false);
     if (!analysisData) {
@@ -67,7 +68,6 @@ export default function App() {
     }
   };
 
-  // Item 2: Fully reset all state — cleared summary, cleared clauses, cleared chat history, cleared file reference
   const handleReset = () => {
     setAnalysisData(null);
     setOriginalText('');
@@ -111,41 +111,49 @@ export default function App() {
             </div>
           )}
 
-          {activeNav === 'upload' ? (
-            <div>
-              <section className="hero-section container">
-                <h1 className="hero-title">
-                  Understand Your Legal Documents in <span style={{ color: 'var(--accent-primary)' }}>Plain English</span>
-                </h1>
-                <p className="hero-subtitle">
-                  Upload your contract, lease, or NDA. ClarifyLegal highlights key obligations, hidden red flags, and potential risks in simple terms with zero file persistence.
-                </p>
-              </section>
+          <Suspense fallback={
+            <div className="loading-state-container" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              Loading ClarifyLegal Module...
+            </div>
+          }>
+            {activeNav === 'upload' ? (
+              <div>
+                <section className="hero-section container">
+                  <h1 className="hero-title">
+                    Understand Your Legal Documents in <span style={{ color: 'var(--accent-primary)' }}>Plain English</span>
+                  </h1>
+                  <p className="hero-subtitle">
+                    Upload your contract, lease, or NDA. ClarifyLegal highlights key obligations, hidden red flags, and potential risks in simple terms with zero file persistence.
+                  </p>
+                </section>
 
-              <DocumentUpload
-                onAnalyzeFile={handleAnalyzeFile}
-                onAnalyzeText={handleAnalyzeText}
+                <DocumentUpload
+                  onAnalyzeFile={handleAnalyzeFile}
+                  onAnalyzeText={handleAnalyzeText}
+                  isLoading={isLoading}
+                />
+              </div>
+            ) : activeNav === 'compare' ? (
+              <DocumentComparison />
+            ) : (
+              <AnalysisDashboard
+                analysisData={analysisData}
+                onReset={handleReset}
                 isLoading={isLoading}
               />
-            </div>
-          ) : activeNav === 'compare' ? (
-            <DocumentComparison />
-          ) : (
-            <AnalysisDashboard
-              analysisData={analysisData}
-              onReset={handleReset}
-              isLoading={isLoading}
-            />
-          )}
+            )}
+          </Suspense>
         </main>
       </div>
 
       {/* 3. Right Sidebar Column */}
-      <RightSidebar
-        documentText={originalText}
-        onSwitchToCompare={() => setActiveNav('compare')}
-        resetKey={resetKey}
-      />
+      <Suspense fallback={null}>
+        <RightSidebar
+          documentText={originalText}
+          onSwitchToCompare={() => setActiveNav('compare')}
+          resetKey={resetKey}
+        />
+      </Suspense>
     </div>
   );
 }
