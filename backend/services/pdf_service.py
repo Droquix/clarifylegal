@@ -6,6 +6,7 @@ Guarantees zero file persistence to preserve strict user privacy.
 """
 
 import io
+import re
 from typing import List
 from pypdf import PdfReader
 from fastapi import HTTPException, status
@@ -93,5 +94,7 @@ def sanitize_and_clean_text(raw_text: str) -> str:
     """
     if not raw_text:
         return ""
-    lines: List[str] = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    # Strip null bytes and non-printable ASCII control characters
+    sanitized = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", raw_text)
+    lines: List[str] = [line.strip() for line in sanitized.splitlines() if line.strip()]
     return "\n".join(lines)

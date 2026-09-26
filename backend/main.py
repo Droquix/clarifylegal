@@ -67,6 +67,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 4. Security Headers Middleware
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 class TextAnalysisRequest(BaseModel):
     text: str = Field(..., min_length=20, max_length=30000, description="Raw document text to analyze")
 
@@ -89,14 +99,33 @@ async def clean_uploaded_document(file: UploadFile) -> str:
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No filename provided in upload.")
 
-    filename_lower: str = file.filename.lower()
+    filename: str = file.filename
+    if "\x00" in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid characters in filename.")
+
+    filename_lower: str = filename.lower()
     if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".txt")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported file format. Please upload a .pdf or .txt file."
         )
 
+    # Validate Content-Type header if provided
+    content_type: str = (file.content_type or "").lower()
+    disallowed_mime_prefixes = ("image/", "audio/", "video/", "application/x-msdownload", "application/x-executable", "application/x-sh")
+    if any(content_type.startswith(prefix) for prefix in disallowed_mime_prefixes):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file format. Please upload a .pdf or .txt file."
+        )
+
     file_bytes: bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty."
+        )
+
     if len(file_bytes) > settings.MAX_FILE_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -106,6 +135,11 @@ async def clean_uploaded_document(file: UploadFile) -> str:
     if filename_lower.endswith(".pdf"):
         extracted_text: str = extract_text_from_pdf_bytes(file_bytes)
     else:
+        if b"\x00" in file_bytes[:1024]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Text file contains binary data and cannot be processed."
+            )
         try:
             extracted_text = file_bytes.decode("utf-8")
         except UnicodeDecodeError:
