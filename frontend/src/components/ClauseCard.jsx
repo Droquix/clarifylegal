@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronUp, Lightbulb, AlertTriangle, HelpCircle, Quote, Check, Copy } from 'lucide-react';
+import { ChevronDown, ChevronUp, Lightbulb, AlertTriangle, HelpCircle, Check, Copy } from 'lucide-react';
 
 export default function ClauseCard({ clause, number, defaultOpen = false }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);

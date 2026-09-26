@@ -1,3 +1,10 @@
+"""
+ClarifyLegal Pydantic Schemas & Data Models
+
+Defines input/output schemas, enums, metadata fields, and disclaimer defaults
+for FastAPI endpoints and service layer integrations.
+"""
+
 from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field

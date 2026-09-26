@@ -1,7 +1,7 @@
 import time
 import logging
 from typing import Dict, List, Tuple
-from fastapi import Request, HTTPException, status
+from fastapi import Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
