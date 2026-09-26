@@ -20,6 +20,7 @@ import {
 export default function ComparisonDashboard({ comparisonData, onReset }) {
   const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'high_risk' | 'added' | 'modified' | 'removed'
   const [copiedId, setCopiedId] = useState(null);
+  const [downloadedReport, setDownloadedReport] = useState(false);
 
   if (!comparisonData) return null;
 
@@ -32,6 +33,44 @@ export default function ComparisonDashboard({ comparisonData, onReset }) {
     navigator.clipboard.writeText(textToCopy);
     setCopiedId(changeId);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleDownloadComparisonReport = () => {
+    let txt = `CLARIFYLEGAL CONTRACT COMPARISON REPORT\n`;
+    txt += `==================================================================\n\n`;
+    txt += `Overview:\n${overview}\n\n`;
+    txt += `Material Changes Identified: ${material_change_count}\n`;
+    txt += `Higher Risk Changes: ${higher_risk_changes}\n\n`;
+    txt += `DETAILED CLAUSE CHANGES & LAWYER QUESTIONS:\n`;
+    txt += `------------------------------------------------------------------\n\n`;
+
+    changes.forEach((c, idx) => {
+      txt += `${idx + 1}. ${c.title} [Type: ${(c.change_type || 'modified').toUpperCase()} | Risk Impact: ${(c.risk_direction || 'unchanged').toUpperCase()}]\n`;
+      txt += `   Impact: ${c.plain_english_impact}\n`;
+      if (c.original_text) txt += `   Original Excerpt: "${c.original_text}"\n`;
+      if (c.revised_text) txt += `   Revised Excerpt: "${c.revised_text}"\n`;
+      if (c.lawyer_questions?.length) {
+        txt += `   Questions for your lawyer:\n`;
+        c.lawyer_questions.forEach(q => txt += `     • ${q}\n`);
+      }
+      txt += `\n`;
+    });
+
+    txt += `==================================================================\n`;
+    txt += `DISCLAIMER: ${disclaimer || 'Informational comparison only.'}\n`;
+
+    const blob = new Blob([txt], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ClarifyLegal-Comparison-Report.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    setDownloadedReport(true);
+    setTimeout(() => setDownloadedReport(false), 3000);
   };
 
   const filteredChanges = changes.filter((change) => {
@@ -52,11 +91,16 @@ export default function ComparisonDashboard({ comparisonData, onReset }) {
 
   return (
     <div className="comparison-results-container">
-      {/* Back Navigation Bar */}
-      <div className="top-nav-row">
+      {/* Back Navigation & Download Action Bar */}
+      <div className="top-nav-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
         <button onClick={onReset} className="back-link-btn">
           <ArrowLeft size={16} />
           <span>Back to Comparison Setup</span>
+        </button>
+
+        <button onClick={handleDownloadComparisonReport} className="btn-download-report">
+          {downloadedReport ? <Check size={16} /> : <Copy size={16} />}
+          <span>{downloadedReport ? 'Downloaded Report!' : 'Download Comparison Report'}</span>
         </button>
       </div>
 

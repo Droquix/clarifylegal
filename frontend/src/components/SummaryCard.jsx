@@ -1,7 +1,10 @@
-import React from 'react';
-import { FileText, Calendar, Scale, Users, Clock, AlertTriangle, Download, MoreVertical, FileCode } from 'lucide-react';
+import React, { useState } from 'react';
+import { FileText, Calendar, Scale, Users, Clock, AlertTriangle, Download, MoreVertical, FileCode, Check, Copy } from 'lucide-react';
 
 export default function SummaryCard({ summary, onDownloadReport, clausesCount = 4 }) {
+  const [copiedSummary, setCopiedSummary] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+
   if (!summary) return null;
 
   const {
@@ -14,6 +17,14 @@ export default function SummaryCard({ summary, onDownloadReport, clausesCount = 
 
   const riskLevel = overall_risk_score?.toLowerCase() || 'medium';
   const riskLabel = riskLevel === 'high' ? 'High Risk' : riskLevel === 'low' ? 'Low Risk' : 'Medium Risk';
+
+  const handleCopySummary = () => {
+    const textToCopy = `Summary for ${document_type || 'Contract'}:\n${executive_summary}`;
+    navigator.clipboard.writeText(textToCopy);
+    setCopiedSummary(true);
+    setShowDropdown(false);
+    setTimeout(() => setCopiedSummary(false), 2000);
+  };
 
   return (
     <div className="summary-dashboard-card">
@@ -35,20 +46,81 @@ export default function SummaryCard({ summary, onDownloadReport, clausesCount = 
           </div>
         </div>
 
-        <div className="doc-actions-group">
+        <div className="doc-actions-group" style={{ position: 'relative' }}>
           <div className={`risk-banner-pill risk-${riskLevel}`}>
             <AlertTriangle size={16} />
             <span>{riskLabel} — See risk breakdown</span>
           </div>
 
-          <button onClick={onDownloadReport} className="btn-download-report">
+          <button onClick={onDownloadReport} className="btn-download-report" title="Download or print legal summary report">
             <Download size={16} />
             <span>Download Report</span>
           </button>
 
-          <button className="btn-icon-overflow" aria-label="More options">
+          <button
+            onClick={() => setShowDropdown(prev => !prev)}
+            className="btn-icon-overflow"
+            aria-label="More options"
+            title="More options"
+          >
             <MoreVertical size={18} />
           </button>
+
+          {showDropdown && (
+            <div className="overflow-dropdown-menu" style={{
+              position: 'absolute',
+              top: '100%',
+              right: 0,
+              marginTop: '0.5rem',
+              backgroundColor: 'var(--bg-card)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              boxShadow: 'var(--shadow-md)',
+              zIndex: 50,
+              minWidth: '180px',
+              padding: '0.4rem 0'
+            }}>
+              <button
+                onClick={onDownloadReport}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '0.6rem 1rem',
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.875rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  cursor: 'pointer'
+                }}
+              >
+                <Download size={15} />
+                <span>Download Report</span>
+              </button>
+
+              <button
+                onClick={handleCopySummary}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '0.6rem 1rem',
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.875rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  cursor: 'pointer'
+                }}
+              >
+                {copiedSummary ? <Check size={15} /> : <Copy size={15} />}
+                <span>{copiedSummary ? 'Copied Summary!' : 'Copy Summary'}</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
