@@ -163,6 +163,7 @@ export default function DocumentUpload({ onAnalyzeFile, onAnalyzeText, isLoading
                     type="button"
                     onClick={() => setFile(null)}
                     className="btn-remove-file"
+                    aria-label="Remove selected file"
                     title="Remove file"
                   >
                     <X size={18} />
@@ -186,7 +187,7 @@ export default function DocumentUpload({ onAnalyzeFile, onAnalyzeText, isLoading
           )}
 
           {errorMsg && (
-            <div className="upload-error-alert" role="alert">
+            <div className="upload-error-alert" role="alert" aria-live="polite">
               {errorMsg}
             </div>
           )}

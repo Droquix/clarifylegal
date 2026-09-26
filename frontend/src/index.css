@@ -850,6 +850,109 @@ button {
   }
 }
 
+/* Export Report Modal Classes */
+.modal-header-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 1rem;
+}
+.modal-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.modal-scale-icon {
+  color: var(--accent-primary);
+}
+.modal-header-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+.modal-close-btn {
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.modal-export-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.modal-action-btn {
+  padding: 0.6rem 1.1rem;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.printable-report-container {
+  background-color: var(--bg-secondary);
+  padding: 1.5rem;
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+.printable-report-header {
+  border-bottom: 2px solid var(--border-color);
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+}
+.printable-report-title {
+  font-size: 1.4rem;
+  font-weight: 800;
+  margin-bottom: 0.25rem;
+}
+.printable-report-meta {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.printable-section-block {
+  margin-bottom: 1.25rem;
+}
+.printable-section-heading {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+  margin-bottom: 0.35rem;
+}
+.printable-overview-text {
+  line-height: 1.6;
+}
+.printable-clause-item {
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+}
+.printable-clause-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.printable-clause-meaning {
+  margin-top: 0.25rem;
+  color: var(--text-secondary);
+}
+.printable-clause-questions {
+  margin-top: 0.35rem;
+  color: var(--accent-primary);
+}
+.printable-questions-list {
+  padding-left: 1.2rem;
+  margin: 0.25rem 0 0 0;
+}
+.printable-disclaimer-footer {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-color);
+  padding-top: 0.75rem;
+  font-style: italic;
+}
+
 .widget-card {
   background-color: var(--bg-card);
   border: 1px solid var(--border-color);

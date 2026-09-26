@@ -1,7 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, lazy, Suspense } from 'react';
 import { Scale, UploadCloud, Type, X, ArrowRight, Loader2, ShieldCheck, FileCode, GitCompare, Sparkles } from 'lucide-react';
-import ComparisonDashboard from './ComparisonDashboard';
 import { compareText, compareFiles } from '../utils/api';
+
+const ComparisonDashboard = lazy(() => import('./ComparisonDashboard'));
 
 const SAMPLE_ORIGINAL_TEXT = `MUTUAL NON-DISCLOSURE AGREEMENT
 This Agreement is entered into on January 15, 2026, by Alpha Inc. and Beta LLC.
@@ -93,10 +94,16 @@ export default function DocumentComparison() {
 
   if (comparisonResult) {
     return (
-      <ComparisonDashboard
-        comparisonData={comparisonResult}
-        onReset={() => setComparisonResult(null)}
-      />
+      <Suspense fallback={
+        <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          Loading Comparison Dashboard...
+        </div>
+      }>
+        <ComparisonDashboard
+          comparisonData={comparisonResult}
+          onReset={() => setComparisonResult(null)}
+        />
+      </Suspense>
     );
   }
 

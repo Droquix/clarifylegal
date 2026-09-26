@@ -124,7 +124,7 @@ export default function RightSidebar({ documentText, onSwitchToCompare, resetKey
         </form>
 
         {errorMsg && (
-          <div className="qa-error-alert" role="alert">
+          <div className="qa-error-alert" role="alert" aria-live="polite">
             {errorMsg}
           </div>
         )}
@@ -144,7 +144,7 @@ export default function RightSidebar({ documentText, onSwitchToCompare, resetKey
 
             {/* Thinking Indicator (Item 1) */}
             {isLoading && (
-              <div className="qa-history-item thinking-indicator-item">
+              <div className="qa-history-item thinking-indicator-item" aria-live="polite">
                 <div className="thinking-content">
                   <Loader2 size={16} className="spin" />
                   <span>ClarifyLegal Assistant is thinking...</span>

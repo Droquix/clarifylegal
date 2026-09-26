@@ -369,6 +369,24 @@ Please analyze the above document content and return a JSON object with this EXA
         )
 
 
+def sanitize_qa_question_input(question: str) -> str:
+    """
+    Sanitizes user-typed Q&A question inputs to prevent prompt boundary injection attacks.
+    Applied EXCLUSIVELY to user chat questions (NOT to uploaded document text context).
+
+    Args:
+        question (str): User-typed question string.
+
+    Returns:
+        str: Sanitized question string.
+    """
+    if not question:
+        return ""
+    cleaned = re.sub(r"-{3,}", "", question)
+    cleaned = re.sub(r"(?i)\b(SYSTEM_PROMPT|SYSTEM:|USER:|ASSISTANT:|<\|im_start\|>|<\|im_end\|>)\b", "", cleaned)
+    return cleaned.strip()
+
+
 def answer_question_with_ai(question: str, document_text: str) -> Dict[str, Any]:
     """
     Answers user questions about an uploaded legal document in plain English using NVIDIA NIM.
@@ -390,8 +408,12 @@ def answer_question_with_ai(question: str, document_text: str) -> Dict[str, Any]
             detail="API key is missing. Please set NVIDIA_API_KEY in your backend/.env file to enable Q&A."
         )
 
+    # Sanitize user chat question input ONLY (leave document_text untouched to preserve legal formatting)
+    safe_question = sanitize_qa_question_input(question)
+    active_question = safe_question if safe_question else question
+
     # Check in-memory LRU cache
-    cached_result = response_cache.get("qa", question, document_text)
+    cached_result = response_cache.get("qa", active_question, document_text)
     if cached_result:
         return cached_result
 
@@ -403,7 +425,7 @@ DOCUMENT CONTEXT:
 {document_text[:25000]}
 ---
 
-USER QUESTION: {question}
+USER QUESTION: {active_question}
 
 Please answer the user's question accurately using ONLY information explicitly found in or implied by the document.
 Remember:

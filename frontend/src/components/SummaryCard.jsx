@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import { FileText, Calendar, Scale, Users, Clock, AlertTriangle, Download, MoreVertical, FileCode, Check, Copy } from 'lucide-react';
 
-export default function SummaryCard({ summary, onDownloadReport, clausesCount = 4 }) {
+function SummaryCard({ summary, onDownloadReport, clausesCount = 4 }) {
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
 
@@ -182,3 +182,5 @@ export default function SummaryCard({ summary, onDownloadReport, clausesCount = 
     </div>
   );
 }
+
+export default memo(SummaryCard);

@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { ArrowLeft, Loader2, ShieldCheck } from 'lucide-react';
 import SummaryCard from './SummaryCard';
 import KeyRisksGrid from './KeyRisksGrid';
 import ClauseList from './ClauseList';
-import ExportReportModal from './ExportReportModal';
+
+const ExportReportModal = lazy(() => import('./ExportReportModal'));
 
 export default function AnalysisDashboard({ analysisData, onReset, isLoading }) {
   const [showExportModal, setShowExportModal] = React.useState(false);
@@ -63,10 +64,12 @@ export default function AnalysisDashboard({ analysisData, onReset, isLoading }) 
 
       {/* Export Printable Report Modal */}
       {showExportModal && (
-        <ExportReportModal
-          analysisData={analysisData}
-          onClose={() => setShowExportModal(false)}
-        />
+        <Suspense fallback={null}>
+          <ExportReportModal
+            analysisData={analysisData}
+            onClose={() => setShowExportModal(false)}
+          />
+        </Suspense>
       )}
     </div>
   );

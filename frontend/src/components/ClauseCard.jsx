@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import { ChevronDown, ChevronUp, Lightbulb, AlertTriangle, HelpCircle, Check, Copy } from 'lucide-react';
 
-export default function ClauseCard({ clause, number, defaultOpen = false }) {
+function ClauseCard({ clause, number, defaultOpen = false }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const [copied, setCopied] = useState(false);
 
@@ -116,3 +116,5 @@ export default function ClauseCard({ clause, number, defaultOpen = false }) {
     </div>
   );
 }
+
+export default memo(ClauseCard);

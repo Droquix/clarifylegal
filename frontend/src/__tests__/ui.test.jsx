@@ -93,7 +93,10 @@ describe('Frontend UI & Error Handling Tests', () => {
     expect(input.value).toBe('What are the main risks?');
 
     const sendBtn = screen.getByTitle(/Send Question/i);
-    fireEvent.click(sendBtn);
+
+    await waitFor(() => {
+      fireEvent.click(sendBtn);
+    });
 
     // Input should be cleared immediately
     expect(input.value).toBe('');
