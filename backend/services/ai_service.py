@@ -108,7 +108,8 @@ def chunk_document_text(text: str, max_chunk_size: int = 12000, overlap: int = 1
 
 def repair_truncated_json(text: str) -> Dict[str, Any]:
     """
-    Repairs truncated JSON strings by closing unclosed quotes, brackets, and braces.
+    Repairs truncated JSON strings by closing unclosed quotes, brackets, and braces,
+    and handling unescaped control characters.
 
     Args:
         text (str): Incomplete or cut-off JSON string from LLM response.
@@ -159,7 +160,33 @@ def repair_truncated_json(text: str) -> Dict[str, Any]:
 
     s += ']' * open_brackets
     s += '}' * open_braces
-    return json.loads(s)
+
+    try:
+        return json.loads(s, strict=False)
+    except Exception:
+        clean_s = re.sub(r'[\r\n]+', r'\\n', s)
+        return json.loads(clean_s, strict=False)
+
+
+def extract_fallback_answer(text: str) -> str:
+    """
+    Extracts plain-English answer content from an unstructured or cut-off AI response string.
+
+    Args:
+        text (str): Raw output string from AI model.
+
+    Returns:
+        str: Cleaned plain-English answer string.
+    """
+    if not text:
+        return "Based on the provided document context, no specific answer could be generated."
+    match = re.search(r'"answer"\s*:\s*"(.*?)(?:"|\s*$)', text, re.DOTALL)
+    if match and match.group(1).strip():
+        return match.group(1).replace('\\n', '\n').strip()
+
+    cleaned = re.sub(r'^\s*\{\s*"answer"\s*:\s*"?', '', text, flags=re.DOTALL)
+    cleaned = re.sub(r'"?\s*\}?\s*$', '', cleaned, flags=re.DOTALL)
+    return cleaned.strip()
 
 
 def extract_json_from_text(text: str) -> Dict[str, Any]:
@@ -179,7 +206,7 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
     cleaned = text.strip()
 
     try:
-        return json.loads(cleaned)
+        return json.loads(cleaned, strict=False)
     except Exception:
         pass
 
@@ -190,7 +217,7 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
                 block_str = block_str[4:].strip()
             if block_str.startswith("{"):
                 try:
-                    return json.loads(block_str)
+                    return json.loads(block_str, strict=False)
                 except Exception:
                     try:
                         return repair_truncated_json(block_str)
@@ -203,9 +230,12 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
         if last_brace > first_brace:
             json_str = cleaned[first_brace:last_brace + 1]
             try:
-                return json.loads(json_str)
+                return json.loads(json_str, strict=False)
             except Exception:
-                pass
+                try:
+                    return repair_truncated_json(json_str)
+                except Exception:
+                    pass
 
         try:
             return repair_truncated_json(cleaned[first_brace:])
@@ -441,18 +471,34 @@ Respond in valid JSON format:
 """
     try:
         response_text = _call_nvidia_api(prompt)
-        data = extract_json_from_text(response_text)
-        answer = sanitize_informational_text(data.get("answer", ""))
+        try:
+            data = extract_json_from_text(response_text)
+            raw_answer = data.get("answer", "")
+            lawyer_followups = data.get("lawyer_followups") or [
+                "Would you recommend any specific revisions to these clauses?",
+                "Are these provisions standard for this type of legal agreement?"
+            ]
+            citations = data.get("citations", [])
+        except Exception as json_err:
+            logger.warning(f"Q&A JSON parsing failed, executing fallback extraction: {json_err}")
+            raw_answer = extract_fallback_answer(response_text)
+            lawyer_followups = [
+                "Would you recommend any specific revisions to these clauses?",
+                "Are these provisions standard for this type of legal agreement?"
+            ]
+            citations = []
+
+        answer = sanitize_informational_text(raw_answer)
         final_result = {
             "question": question,
             "answer": answer,
-            "lawyer_followups": data.get("lawyer_followups", []),
-            "citations": data.get("citations", []),
+            "lawyer_followups": lawyer_followups,
+            "citations": citations,
             "disclaimer": MANDATORY_DISCLAIMER
         }
 
         # Store in LRU cache
-        response_cache.set("qa", final_result, question, document_text)
+        response_cache.set("qa", final_result, active_question, document_text)
         return final_result
 
     except HTTPException:

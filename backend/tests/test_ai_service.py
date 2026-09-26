@@ -56,3 +56,19 @@ def test_extract_json_from_text_repairs_truncated_json():
     assert isinstance(parsed, dict)
     assert "summary" in parsed
     assert "The revised contract" in parsed["summary"]["overview"]
+
+def test_answer_question_with_ai_repairs_truncated_chat_json():
+    specific_doc = "PERSONAL LOAN AGREEMENT. Principal amount is $6,000. Repayment is $200 per month."
+    question = "What are the 5 most important clauses?"
+
+    truncated_user_case = '{ "answer": "Based on the contract, the 5 most important clauses are: 1. The Loan Amount clause (Section 1), which specifies the principal sum of $6,000 and the disbursement timeline. 2. The Repayment Schedule clause (Section 3), which outlines the monthly payments and the final balloon payme'
+
+    with patch("backend.services.ai_service.settings.NVIDIA_API_KEY", "nvapi-valid-test-key"):
+        with patch("backend.services.ai_service._call_nvidia_api") as mock_api:
+            mock_api.return_value = truncated_user_case
+
+            result = answer_question_with_ai(question, specific_doc)
+
+            assert "$6,000" in result["answer"]
+            assert "Loan Amount" in result["answer"]
+            assert len(result["lawyer_followups"]) >= 1
