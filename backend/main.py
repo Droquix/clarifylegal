@@ -67,14 +67,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 4. Security Headers Middleware
+# 4. Security & Cache-Control Headers Middleware
 @app.middleware("http")
-async def add_security_headers(request, call_next):
+async def add_security_and_cache_headers(request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+    if request.url.path in ["/health", "/api/health"]:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+    elif request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+
     return response
 
 class TextAnalysisRequest(BaseModel):
